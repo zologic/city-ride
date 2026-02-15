@@ -5,6 +5,7 @@ jQuery(document).ready(function($) {
     let cardMounted = false;
     let currentBookingData = {};
     let oneSignalPlayerId = ''; // Variable to store OneSignal Player ID
+    let iti; // International telephone input instance
 
     // Initialize Stripe if public key is available
     if (typeof cityride_frontend_ajax !== 'undefined' && typeof cityride_frontend_ajax.stripe_public_key === 'string' && cityride_frontend_ajax.stripe_public_key.length > 0) {
@@ -92,6 +93,9 @@ jQuery(document).ready(function($) {
         $('#passenger_onesignal_id').val('');
     }
 
+    // Initialize International Phone Input
+    initializeInternationalPhone();
+
     // Handle price calculation button click (rest of your script remains the same)
     $('#calculate-price-btn').on('click', function() {
         const addressFrom = $('#address-from').val().trim();
@@ -177,6 +181,130 @@ jQuery(document).ready(function($) {
         });
     });
 
+    // International Phone Input Functions
+    function initializeInternationalPhone() {
+        const input = document.querySelector("#passenger-phone");
+
+        if (!input || typeof window.intlTelInput === 'undefined') {
+            console.warn('International phone input not available');
+            return;
+        }
+
+        // Initialize intl-tel-input with auto-detect and preferred countries
+        fetch('https://ipapi.co/json/')
+            .then(response => response.json())
+            .then(data => {
+                const countryCode = data.country_code ? data.country_code.toLowerCase() : 'ba';
+                initPhoneInput(input, countryCode);
+            })
+            .catch(error => {
+                console.log('Could not detect country, defaulting to Bosnia');
+                initPhoneInput(input, 'ba');
+            });
+    }
+
+    function initPhoneInput(input, initialCountry) {
+        iti = window.intlTelInput(input, {
+            preferredCountries: ['ba', 'hr', 'rs', 'me', 'si', 'mk'],
+            initialCountry: initialCountry,
+            separateDialCode: true,
+            autoPlaceholder: 'aggressive',
+            formatOnDisplay: true,
+            nationalMode: false,
+            utilsScript: "https://cdn.jsdelivr.net/npm/intl-tel-input@18.5.3/build/js/utils.js"
+        });
+
+        // Validate on blur
+        input.addEventListener('blur', function() {
+            validatePhoneNumber();
+        });
+
+        // Validate on country change
+        input.addEventListener('countrychange', function() {
+            validatePhoneNumber();
+        });
+
+        // Update hidden field on input
+        input.addEventListener('input', function() {
+            updateHiddenPhoneField();
+        });
+    }
+
+    function validatePhoneNumber() {
+        const input = document.querySelector("#passenger-phone");
+        const errorMsg = document.querySelector("#phone-error");
+        const successMsg = document.querySelector(".phone-success");
+
+        if (!input || !input.value.trim()) {
+            hidePhoneMessages();
+            return false;
+        }
+
+        if (iti && iti.isValidNumber()) {
+            input.classList.remove('error');
+            input.classList.add('valid');
+            errorMsg.style.display = 'none';
+            successMsg.style.display = 'block';
+            updateHiddenPhoneField();
+            return true;
+        } else {
+            input.classList.add('error');
+            input.classList.remove('valid');
+            successMsg.style.display = 'none';
+
+            const errorCode = iti ? iti.getValidationError() : 0;
+            const errorMessages = {
+                0: 'Nevažeći broj telefona',
+                1: 'Nevažeći kod države',
+                2: 'Broj telefona je prekratak',
+                3: 'Broj telefona je predug',
+                4: 'Nevažeći broj telefona',
+                5: 'Nevažeći broj telefona'
+            };
+
+            errorMsg.textContent = errorMessages[errorCode] || 'Nevažeći broj telefona';
+            errorMsg.style.display = 'block';
+            return false;
+        }
+    }
+
+    function updateHiddenPhoneField() {
+        const hiddenField = document.querySelector("#passenger-phone-full");
+        const countryField = document.querySelector("#passenger-phone-country");
+        const dialcodeField = document.querySelector("#passenger-phone-dialcode");
+
+        if (iti && iti.isValidNumber()) {
+            const e164Number = iti.getNumber();
+            const countryData = iti.getSelectedCountryData();
+
+            hiddenField.value = e164Number;
+            countryField.value = countryData.iso2;
+            dialcodeField.value = '+' + countryData.dialCode;
+        } else {
+            hiddenField.value = '';
+            countryField.value = '';
+            dialcodeField.value = '';
+        }
+    }
+
+    function hidePhoneMessages() {
+        const input = document.querySelector("#passenger-phone");
+        const errorMsg = document.querySelector("#phone-error");
+        const successMsg = document.querySelector(".phone-success");
+
+        if (input) input.classList.remove('error', 'valid');
+        if (errorMsg) errorMsg.style.display = 'none';
+        if (successMsg) successMsg.style.display = 'none';
+    }
+
+    // Function to get full international phone number
+    function getFullPhoneNumber() {
+        if (iti && iti.isValidNumber()) {
+            return iti.getNumber(); // Returns E.164 format
+        }
+        return $('#passenger-phone-full').val() || '';
+    }
+
     // Handle complete payment button click (Stripe payment initiation)
     $('#complete-payment-btn').on('click', function() {
         if (!stripe || !cardElement) {
@@ -189,11 +317,18 @@ jQuery(document).ready(function($) {
         $('#stripe-card-errors').text('');
 
         const passengerName = $('#passenger-name').val().trim();
-        const passengerPhone = $('#passenger-phone').val().trim();
+        const passengerPhone = getFullPhoneNumber();
         const passengerEmail = $('#passenger-email').val()?.trim() || '';
 
         if (!passengerName || !passengerPhone) {
             $('#cityride-message').text('Molimo unesite Vaše ime i telefon.').css('color', 'red').fadeIn();
+            btn.prop('disabled', false).text('Pozovi taxi');
+            return;
+        }
+
+        // Validate phone number using intl-tel-input
+        if (!validatePhoneNumber()) {
+            $('#cityride-message').text('Molimo unesite važeći broj telefona.').css('color', 'red').fadeIn();
             btn.prop('disabled', false).text('Pozovi taxi');
             return;
         }
@@ -217,6 +352,8 @@ jQuery(document).ready(function($) {
             distance_km: currentBookingData.distance_km,
             passenger_name: passengerName,
             passenger_phone: passengerPhone,
+            passenger_phone_country: $('#passenger-phone-country').val(),
+            passenger_phone_dialcode: $('#passenger-phone-dialcode').val(),
             passenger_email: passengerEmail,
             passenger_onesignal_id: finalOneSignalPlayerId // Proslijeđuje Player ID backendu
         };
@@ -281,6 +418,8 @@ jQuery(document).ready(function($) {
                 total_price: currentBookingData.total_price,
                 passenger_name: paymentData.passenger_name,
                 passenger_phone: paymentData.passenger_phone,
+                passenger_phone_country: paymentData.passenger_phone_country,
+                passenger_phone_dialcode: paymentData.passenger_phone_dialcode,
                 passenger_email: paymentData.passenger_email,
                 passenger_onesignal_id: finalOneSignalPlayerId, // Proslijeđuje Player ID
                 discount_code: discountData ? discountData.code : '',
