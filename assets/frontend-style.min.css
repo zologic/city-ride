@@ -1226,3 +1226,83 @@ body {
         font-size: 15px !important;
     }
 }
+
+/* ==========================================
+   NUCLEAR FIX - FORCE PADDING WITH MAX SPECIFICITY
+   ========================================== */
+/* Target the input with ALL possible selectors to override library defaults */
+.iti.iti--allow-dropdown input.iti__tel-input[type="tel"],
+.iti.iti--allow-dropdown input#passenger-phone[type="tel"],
+input.iti__tel-input#passenger-phone,
+#passenger-phone.iti__tel-input,
+input#passenger-phone {
+    padding-left: 100px !important;
+    padding-right: 15px !important;
+    padding-top: 14px !important;
+    padding-bottom: 14px !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+}
+
+/* Force the container to respect layout */
+.iti.iti--allow-dropdown {
+    width: 100% !important;
+    position: relative !important;
+}
+
+/* Ensure flag container stays on left but doesn't block input */
+.iti.iti--allow-dropdown .iti__flag-container {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    height: 100% !important;
+    z-index: 1 !important;
+    pointer-events: none !important; /* Don't block input clicks */
+}
+
+.iti.iti--allow-dropdown .iti__selected-flag {
+    pointer-events: all !important; /* Allow clicking the flag */
+    height: 100% !important;
+    padding: 0 10px !important;
+    display: flex !important;
+    align-items: center !important;
+}
+
+/* Make input clickable above flag container */
+.iti.iti--allow-dropdown .iti__tel-input {
+    position: relative !important;
+    z-index: 2 !important;
+}
+
+/* Mobile - Nuclear padding */
+@media (max-width: 768px) {
+    .iti.iti--allow-dropdown input.iti__tel-input[type="tel"],
+    .iti.iti--allow-dropdown input#passenger-phone[type="tel"],
+    input.iti__tel-input#passenger-phone,
+    #passenger-phone.iti__tel-input,
+    input#passenger-phone {
+        padding-left: 105px !important;
+        font-size: 16px !important;
+        min-height: 48px !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .iti.iti--allow-dropdown input.iti__tel-input[type="tel"],
+    .iti.iti--allow-dropdown input#passenger-phone[type="tel"],
+    input.iti__tel-input#passenger-phone,
+    #passenger-phone.iti__tel-input,
+    input#passenger-phone {
+        padding-left: 100px !important;
+    }
+}
+
+@media (max-width: 375px) {
+    .iti.iti--allow-dropdown input.iti__tel-input[type="tel"],
+    .iti.iti--allow-dropdown input#passenger-phone[type="tel"],
+    input.iti__tel-input#passenger-phone,
+    #passenger-phone.iti__tel-input,
+    input#passenger-phone {
+        padding-left: 95px !important;
+    }
+}
