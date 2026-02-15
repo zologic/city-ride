@@ -1316,7 +1316,7 @@ input#passenger-phone {
 }
 
 /* ==========================================
-   DISCOUNT CODE SECTION - Responsive Layout
+   DISCOUNT CODE SECTION - VERTICAL LAYOUT
    ========================================== */
 .discount-code-section {
     margin: 20px 0 !important;
@@ -1330,48 +1330,73 @@ input#passenger-phone {
     display: block !important;
     font-size: 14px !important;
     font-weight: 600 !important;
-    margin-bottom: 10px !important;
+    margin-bottom: 12px !important;
     color: #333 !important;
 }
 
-/* Input group wrapper - horizontal on desktop */
+/* IMPORTANT: Always vertical layout (input above button) */
 .discount-input-group {
     display: flex !important;
-    flex-direction: row !important;
-    gap: 8px !important;
+    flex-direction: column !important;
+    gap: 10px !important;
     width: 100% !important;
 }
 
+/* Input field styling */
 .discount-input-group input {
-    flex: 1 !important;
-    min-height: 44px !important;
-    padding: 10px 15px !important;
+    width: 100% !important;
+    padding: 12px 15px !important;
     border: 2px solid #e0e0e0 !important;
     border-radius: 8px !important;
     font-size: 15px !important;
     text-transform: uppercase !important;
     box-sizing: border-box !important;
+    background: white !important;
+    min-height: 44px !important;
 }
 
+/* Placeholder styling - ensure it's visible */
+.discount-input-group input::placeholder {
+    color: #999 !important;
+    opacity: 1 !important;
+    font-size: 15px !important;
+}
+
+.discount-input-group input::-webkit-input-placeholder {
+    color: #999 !important;
+    opacity: 1 !important;
+}
+
+.discount-input-group input::-moz-placeholder {
+    color: #999 !important;
+    opacity: 1 !important;
+}
+
+.discount-input-group input:-ms-input-placeholder {
+    color: #999 !important;
+    opacity: 1 !important;
+}
+
+/* Focus state */
 .discount-input-group input:focus {
     outline: none !important;
     border-color: #667eea !important;
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
 }
 
+/* Button styling - full width */
 .discount-input-group button {
-    flex: 0 0 auto !important;
-    padding: 0 24px !important;
+    width: 100% !important;
+    padding: 12px 20px !important;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
     color: white !important;
     border: none !important;
     border-radius: 8px !important;
     font-weight: 600 !important;
-    white-space: nowrap !important;
+    font-size: 16px !important;
     min-height: 44px !important;
     cursor: pointer !important;
     transition: transform 0.2s !important;
-    min-width: auto !important;
 }
 
 .discount-input-group button:hover {
@@ -1383,40 +1408,27 @@ input#passenger-phone {
     transform: translateY(0) !important;
 }
 
-/* Mobile: Stack vertically */
-@media (max-width: 480px) {
-    .discount-input-group {
-        flex-direction: column !important;
-        gap: 10px !important;
+/* Mobile optimization */
+@media (max-width: 768px) {
+    .discount-input-group input {
+        font-size: 16px !important;
+        min-height: 48px !important;
     }
 
-    .discount-input-group input {
-        width: 100% !important;
-        min-height: 48px !important;
+    .discount-input-group input::placeholder {
         font-size: 16px !important;
     }
 
     .discount-input-group button {
-        width: 100% !important;
-        flex: none !important;
-        padding: 12px 20px !important;
+        min-height: 48px !important;
         font-size: 16px !important;
     }
 }
 
-/* iPhone SE and smaller */
-@media (max-width: 375px) {
+/* Small phones */
+@media (max-width: 480px) {
     .discount-code-section {
         padding: 12px !important;
         margin: 15px 0 !important;
-    }
-
-    .discount-input-group input {
-        font-size: 15px !important;
-        padding: 10px 12px !important;
-    }
-
-    .discount-input-group button {
-        font-size: 15px !important;
     }
 }
