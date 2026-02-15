@@ -55,16 +55,43 @@ class CityRideBooking {
         add_action('wp_ajax_cityride_save_booking', array($this, 'ajax_save_booking'));
         add_action('wp_ajax_nopriv_cityride_save_booking', array($this, 'ajax_save_booking'));
 
+        add_action('wp_ajax_cityride_validate_discount_code', array($this, 'ajax_validate_discount_code'));
+        add_action('wp_ajax_nopriv_cityride_validate_discount_code', array($this, 'ajax_validate_discount_code'));
 
         // AJAX hooks for admin (requires authentication)
         add_action('wp_ajax_cityride_load_rides', array($this, 'ajax_load_rides'));
         add_action('wp_ajax_cityride_assign_driver', array($this, 'ajax_assign_driver'));
         add_action('wp_ajax_cityride_complete_ride', array($this, 'ajax_complete_ride'));
+        add_action('wp_ajax_cityride_cancel_ride', array($this, 'ajax_cancel_ride'));
         add_action('wp_ajax_cityride_export_rides', array($this, 'ajax_export_rides')); // Returns CSV data via AJAX
         add_action('wp_ajax_cityride_test_webhook', array($this, 'ajax_test_webhook'));
 
-        // REST API Endpoint for Stripe Webhooks
+        // AJAX hooks for driver management
+        add_action('wp_ajax_cityride_load_drivers', array($this, 'ajax_load_drivers'));
+        add_action('wp_ajax_cityride_get_driver', array($this, 'ajax_get_driver'));
+        add_action('wp_ajax_cityride_save_driver', array($this, 'ajax_save_driver'));
+        add_action('wp_ajax_cityride_delete_driver', array($this, 'ajax_delete_driver'));
+        add_action('wp_ajax_cityride_get_active_drivers', array($this, 'ajax_get_active_drivers'));
+        add_action('wp_ajax_cityride_export_driver_earnings', array($this, 'ajax_export_driver_earnings'));
+
+        // AJAX hooks for analytics
+        add_action('wp_ajax_cityride_get_analytics_data', array($this, 'ajax_get_analytics_data'));
+        add_action('wp_ajax_cityride_export_analytics_excel', array($this, 'ajax_export_analytics_excel'));
+
+        // AJAX hooks for discount code management
+        add_action('wp_ajax_cityride_load_discount_codes', array($this, 'ajax_load_discount_codes'));
+        add_action('wp_ajax_cityride_get_discount_code', array($this, 'ajax_get_discount_code'));
+        add_action('wp_ajax_cityride_save_discount_code', array($this, 'ajax_save_discount_code'));
+        add_action('wp_ajax_cityride_delete_discount_code', array($this, 'ajax_delete_discount_code'));
+        add_action('wp_ajax_cityride_toggle_discount_code', array($this, 'ajax_toggle_discount_code'));
+
+        // REST API Endpoints for Webhooks
         add_action( 'rest_api_init', array($this, 'register_stripe_webhook_endpoint'));
+        add_action( 'rest_api_init', array($this, 'register_infobip_webhook_endpoint'));
+        add_action( 'rest_api_init', array($this, 'register_infobip_message_id_endpoint'));
+
+        // Register webhook retry cron action
+        add_action('cityride_retry_webhook', array($this, 'cron_retry_webhook'), 10, 3);
     }
 
     /**
@@ -86,6 +113,18 @@ class CityRideBooking {
         add_option('cityride_enable_push_notifications', '1');
         add_option('cityride_enable_webhook_notifications', '1');
         add_option('cityride_stripe_webhook_secret', '');
+
+        // Pricing and surcharge settings
+        add_option('cityride_minimum_fare', '5.00');
+        add_option('cityride_night_surcharge_enabled', '1');
+        add_option('cityride_night_surcharge_percent', '20');
+        add_option('cityride_night_start_time', '22:00');
+        add_option('cityride_night_end_time', '06:00');
+        add_option('cityride_weekend_surcharge_enabled', '1');
+        add_option('cityride_weekend_surcharge_percent', '15');
+        add_option('cityride_holiday_surcharge_enabled', '1');
+        add_option('cityride_holiday_surcharge_percent', '25');
+        add_option('cityride_holiday_dates', ''); // Comma-separated dates (YYYY-MM-DD)
     }
 
     /**
@@ -200,16 +239,133 @@ class CityRideBooking {
         // Convert to stripe format (smallest currency unit, e.g., cents)
         $stripe_amount = round($total_price * 100);
 
+        // Apply surcharges and minimum fare
+        $pricing_details = $this->calculate_enhanced_price($total_price, $distance_km);
+
         wp_send_json_success([
             'distance_km' => $distance_km,
-            'total_price' => $total_price,
-            'stripe_amount' => $stripe_amount,
+            'base_price' => $total_price,
+            'total_price' => $pricing_details['final_price'],
+            'stripe_amount' => $pricing_details['stripe_amount'],
             'start_tariff' => $start_tariff,
             'price_per_km' => $price_per_km,
+            'minimum_fare' => $pricing_details['minimum_fare'],
+            'surcharges' => $pricing_details['surcharges'],
+            'surcharge_total' => $pricing_details['surcharge_total'],
             'route_geometry' => $route_geometry,
             'from_coords' => $from_coords,
             'to_coords' => $to_coords
         ]);
+    }
+
+    /**
+     * Calculate enhanced price with surcharges and minimum fare
+     *
+     * @param float $base_price Base calculated price (start tariff + km price)
+     * @param float $distance_km Distance in kilometers
+     * @param string|null $booking_datetime Optional booking datetime (defaults to current time)
+     * @return array Pricing details with surcharges and final price
+     */
+    private function calculate_enhanced_price($base_price, $distance_km, $booking_datetime = null) {
+        // Use provided datetime or current time
+        $datetime = $booking_datetime ? new DateTime($booking_datetime) : new DateTime('now', new DateTimeZone('Europe/Sarajevo'));
+
+        $minimum_fare = floatval(get_option('cityride_minimum_fare', '5.00'));
+        $surcharges = [];
+        $surcharge_total = 0;
+
+        // Apply minimum fare
+        $calculated_price = max($base_price, $minimum_fare);
+
+        // Check for night surcharge
+        if (get_option('cityride_night_surcharge_enabled') === '1') {
+            $night_percent = floatval(get_option('cityride_night_surcharge_percent', '20'));
+            $night_start = get_option('cityride_night_start_time', '22:00');
+            $night_end = get_option('cityride_night_end_time', '06:00');
+
+            if ($this->is_night_time($datetime, $night_start, $night_end)) {
+                $night_surcharge = ($calculated_price * $night_percent) / 100;
+                $surcharges[] = [
+                    'type' => 'night',
+                    'label' => 'Noćni dodatak',
+                    'percent' => $night_percent,
+                    'amount' => round($night_surcharge, 2)
+                ];
+                $surcharge_total += $night_surcharge;
+            }
+        }
+
+        // Check for weekend surcharge
+        if (get_option('cityride_weekend_surcharge_enabled') === '1') {
+            $weekend_percent = floatval(get_option('cityride_weekend_surcharge_percent', '15'));
+            $day_of_week = $datetime->format('N'); // 1 (Mon) through 7 (Sun)
+
+            if ($day_of_week >= 6) { // Saturday (6) or Sunday (7)
+                $weekend_surcharge = ($calculated_price * $weekend_percent) / 100;
+                $surcharges[] = [
+                    'type' => 'weekend',
+                    'label' => 'Vikend dodatak',
+                    'percent' => $weekend_percent,
+                    'amount' => round($weekend_surcharge, 2)
+                ];
+                $surcharge_total += $weekend_surcharge;
+            }
+        }
+
+        // Check for holiday surcharge
+        if (get_option('cityride_holiday_surcharge_enabled') === '1') {
+            $holiday_percent = floatval(get_option('cityride_holiday_surcharge_percent', '25'));
+            $holiday_dates_str = get_option('cityride_holiday_dates', '');
+
+            if (!empty($holiday_dates_str)) {
+                $holiday_dates = array_map('trim', explode(',', $holiday_dates_str));
+                $current_date = $datetime->format('Y-m-d');
+
+                if (in_array($current_date, $holiday_dates)) {
+                    $holiday_surcharge = ($calculated_price * $holiday_percent) / 100;
+                    $surcharges[] = [
+                        'type' => 'holiday',
+                        'label' => 'Dodatak za praznik',
+                        'percent' => $holiday_percent,
+                        'amount' => round($holiday_surcharge, 2)
+                    ];
+                    $surcharge_total += $holiday_surcharge;
+                }
+            }
+        }
+
+        $final_price = round($calculated_price + $surcharge_total, 2);
+        $stripe_amount = round($final_price * 100);
+
+        return [
+            'base_price' => round($base_price, 2),
+            'minimum_fare' => $minimum_fare,
+            'calculated_price' => round($calculated_price, 2), // After minimum fare
+            'surcharges' => $surcharges,
+            'surcharge_total' => round($surcharge_total, 2),
+            'final_price' => $final_price,
+            'stripe_amount' => $stripe_amount
+        ];
+    }
+
+    /**
+     * Check if the given datetime falls within night hours
+     *
+     * @param DateTime $datetime The datetime to check
+     * @param string $start_time Start time (HH:MM format)
+     * @param string $end_time End time (HH:MM format)
+     * @return bool True if within night hours
+     */
+    private function is_night_time($datetime, $start_time, $end_time) {
+        $current_time = $datetime->format('H:i');
+
+        // Handle overnight periods (e.g., 22:00 - 06:00)
+        if ($start_time > $end_time) {
+            return $current_time >= $start_time || $current_time < $end_time;
+        }
+
+        // Handle same-day periods (e.g., 01:00 - 05:00)
+        return $current_time >= $start_time && $current_time < $end_time;
     }
 
     /**
@@ -318,6 +474,88 @@ class CityRideBooking {
     }
 
     /**
+     * AJAX handler for validating discount codes
+     * Checks code validity, usage limits, and calculates discount
+     */
+    public function ajax_validate_discount_code() {
+        check_ajax_referer('cityride_frontend_nonce', 'nonce');
+
+        $code = strtoupper(trim(sanitize_text_field($_POST['code'])));
+        $order_amount = floatval($_POST['order_amount']);
+
+        if (empty($code)) {
+            wp_send_json_error('Molimo unesite kod popusta.');
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_discount_codes';
+
+        // Fetch discount code
+        $discount = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $table_name WHERE code = %s AND is_active = 1",
+            $code
+        ));
+
+        if (!$discount) {
+            wp_send_json_error('Nepoznat kod popusta ili je istekao.');
+        }
+
+        // Check validity dates
+        $now = current_time('mysql');
+        if ($discount->valid_from && $discount->valid_from > $now) {
+            wp_send_json_error('Kod popusta još nije aktivan.');
+        }
+
+        if ($discount->valid_until && $discount->valid_until < $now) {
+            wp_send_json_error('Kod popusta je istekao.');
+        }
+
+        // Check usage limit
+        if ($discount->usage_limit && $discount->usage_count >= $discount->usage_limit) {
+            wp_send_json_error('Kod popusta je dostigao limit korištenja.');
+        }
+
+        // Check minimum order amount
+        if ($discount->min_order_amount > $order_amount) {
+            wp_send_json_error(sprintf(
+                'Minimalan iznos za ovaj kod je %.2f BAM.',
+                $discount->min_order_amount
+            ));
+        }
+
+        // Calculate discount amount
+        $discount_amount = 0;
+        if ($discount->discount_type === 'percent') {
+            $discount_amount = ($order_amount * $discount->discount_value) / 100;
+
+            // Apply max discount cap if set
+            if ($discount->max_discount_amount && $discount_amount > $discount->max_discount_amount) {
+                $discount_amount = $discount->max_discount_amount;
+            }
+        } else {
+            // Fixed amount discount
+            $discount_amount = min($discount->discount_value, $order_amount);
+        }
+
+        $discount_amount = round($discount_amount, 2);
+        $final_price = max($order_amount - $discount_amount, 0);
+
+        wp_send_json_success([
+            'code' => $discount->code,
+            'discount_type' => $discount->discount_type,
+            'discount_value' => floatval($discount->discount_value),
+            'discount_amount' => $discount_amount,
+            'original_price' => $order_amount,
+            'final_price' => round($final_price, 2),
+            'stripe_amount' => round($final_price * 100),
+            'message' => sprintf(
+                'Kod popusta primijenjen! Ušteda: %.2f BAM',
+                $discount_amount
+            )
+        ]);
+    }
+
+    /**
      * AJAX handler for saving a booking after successful payment.
      * Verifies payment with Stripe and saves booking details to the database.
      */
@@ -333,6 +571,12 @@ class CityRideBooking {
         $passenger_phone = sanitize_text_field($_POST['passenger_phone']);
         $passenger_email = sanitize_email($_POST['passenger_email'] ?? '');
         $passenger_onesignal_id = sanitize_text_field($_POST['passenger_onesignal_id'] ?? ''); // Expecting this from frontend
+
+        // Discount code information
+        $discount_code = isset($_POST['discount_code']) ? strtoupper(trim(sanitize_text_field($_POST['discount_code']))) : '';
+        $discount_amount = isset($_POST['discount_amount']) ? floatval($_POST['discount_amount']) : 0;
+        $original_price = isset($_POST['original_price']) ? floatval($_POST['original_price']) : $total_price;
+        $final_price = isset($_POST['final_price']) ? floatval($_POST['final_price']) : $total_price;
 
         if (empty($payment_intent_id) || empty($address_from) || empty($address_to) ||
             empty($passenger_name) || empty($passenger_phone)) {
@@ -361,6 +605,10 @@ class CityRideBooking {
                 'address_to' => $address_to,
                 'distance_km' => $distance_km,
                 'total_price' => $total_price,
+                'discount_code' => !empty($discount_code) ? $discount_code : null,
+                'discount_amount' => $discount_amount,
+                'original_price' => $discount_amount > 0 ? $original_price : null,
+                'final_price' => $discount_amount > 0 ? $final_price : null,
                 'stripe_payment_id' => $payment_intent_id,
                 'passenger_email' => $passenger_email,
                 'passenger_onesignal_id' => $passenger_onesignal_id, // Store player ID in DB
@@ -369,7 +617,7 @@ class CityRideBooking {
                 'updated_at' => current_time('mysql')
             ),
             array(
-                '%s', '%s', '%s', '%s', '%f', '%f', '%s', '%s', '%s', '%s', '%s', '%s'
+                '%s', '%s', '%s', '%s', '%f', '%f', '%s', '%f', '%f', '%f', '%s', '%s', '%s', '%s', '%s', '%s'
             )
         );
 
@@ -380,16 +628,40 @@ class CityRideBooking {
 
         $booking_id = $wpdb->insert_id;
 
+        // Increment discount code usage count if discount was applied
+        if (!empty($discount_code)) {
+            $discount_table = $wpdb->prefix . 'cityride_discount_codes';
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $discount_table SET usage_count = usage_count + 1 WHERE code = %s",
+                $discount_code
+            ));
+            error_log('CityRide: Incremented usage count for discount code: ' . $discount_code);
+        }
+
         // Log successful booking creation
         error_log('CityRide: Booking ' . $booking_id . ' successfully saved to database');
 
-        // Check webhook notifications setting and log
+        // Check webhook notifications setting and send booking_confirmed event
         $webhook_enabled = get_option('cityride_enable_webhook_notifications');
         error_log('CityRide: Webhook notifications setting: ' . ($webhook_enabled === '1' ? 'enabled' : 'disabled'));
 
         if ($webhook_enabled === '1') {
-            error_log('CityRide: Webhook notifications enabled, triggering for booking ' . $booking_id);
-            $this->send_webhook_notification($booking_id);
+            error_log('CityRide: Webhook notifications enabled, triggering booking_confirmed event for booking ' . $booking_id);
+
+            // Prepare ride data for webhook
+            $ride_data = array(
+                'id' => $booking_id,
+                'passenger_name' => $passenger_name,
+                'passenger_phone' => $passenger_phone,
+                'passenger_email' => $passenger_email,
+                'address_from' => $address_from,
+                'address_to' => $address_to,
+                'distance_km' => $distance_km,
+                'total_price' => $total_price,
+            );
+
+            // Send booking_confirmed webhook
+            $this->send_event_webhook('booking_confirmed', $ride_data);
             error_log('CityRide: Webhook notification call completed for booking ' . $booking_id);
         }
 
@@ -562,6 +834,210 @@ class CityRideBooking {
     }
 
     /**
+     * Enhanced webhook system - Sends event-based notifications to n8n/Make.com
+     * Supports multiple event types: booking_confirmed, driver_assigned, ride_completed, ride_cancelled
+     *
+     * @param string $event_type The type of event (booking_confirmed, driver_assigned, ride_completed, ride_cancelled)
+     * @param array $ride_data Array containing ride information
+     */
+    private function send_event_webhook($event_type, $ride_data) {
+        $webhook_url = get_option('cityride_make_webhook_url');
+
+        if (empty($webhook_url) || get_option('cityride_enable_webhook_notifications') !== '1') {
+            error_log("CityRide: Webhook disabled or URL not configured for event: {$event_type}");
+            return;
+        }
+
+        // Format phone number to international format (+387 for Bosnia)
+        $phone = $ride_data['passenger_phone'];
+        if (!empty($phone) && substr($phone, 0, 1) !== '+') {
+            // Remove leading zero and add Bosnia country code
+            $phone = '+387' . ltrim($phone, '0');
+        }
+
+        // Build base payload
+        $payload = array(
+            'event' => $event_type,
+            'booking_id' => $ride_data['id'],
+            'passenger_phone' => $phone,
+            'passenger_name' => $ride_data['passenger_name'],
+            'passenger_email' => $ride_data['passenger_email'] ?? '',
+            'address_from' => $ride_data['address_from'],
+            'address_to' => $ride_data['address_to'],
+            'distance_km' => number_format($ride_data['distance_km'], 2),
+            'total_price' => number_format($ride_data['total_price'], 2) . ' BAM',
+            'timestamp' => current_time('c'), // ISO 8601 format
+        );
+
+        // Add event-specific fields
+        switch ($event_type) {
+            case 'driver_assigned':
+                $payload['driver_name'] = $ride_data['driver_name'] ?? '';
+                $payload['vehicle_number'] = $ride_data['cab_driver_id'] ?? '';
+                $payload['eta'] = $ride_data['eta'] ?? '';
+                break;
+
+            case 'ride_cancelled':
+                $payload['cancellation_reason'] = $ride_data['cancellation_reason'] ?? 'No reason provided';
+                break;
+
+            case 'ride_completed':
+                $payload['driver_name'] = $ride_data['driver_name'] ?? '';
+                $payload['vehicle_number'] = $ride_data['cab_driver_id'] ?? '';
+                break;
+        }
+
+        // Add SMS template and message (for n8n to use)
+        $sms_template_key = 'cityride_sms_' . $event_type;
+        $sms_enabled_key = 'cityride_enable_sms_' . str_replace('ride_', '', str_replace('booking_', '', $event_type));
+
+        $payload['sms_template'] = get_option($sms_template_key, '');
+        $payload['sms_enabled'] = get_option($sms_enabled_key, 'yes') === 'yes';
+
+        // Replace variables in SMS template
+        if (!empty($payload['sms_template'])) {
+            $payload['sms_message'] = $this->replace_sms_variables($payload['sms_template'], $payload);
+        }
+
+        // Send webhook with retry mechanism
+        $this->send_webhook_with_retry($webhook_url, $payload, 1);
+    }
+
+    /**
+     * Replaces variables in SMS template with actual values
+     *
+     * @param string $template The SMS template with variables
+     * @param array $data The data to replace variables with
+     * @return string The SMS message with replaced variables
+     */
+    private function replace_sms_variables($template, $data) {
+        $replacements = array(
+            '{passenger_name}' => $data['passenger_name'] ?? '',
+            '{driver_name}' => $data['driver_name'] ?? '',
+            '{vehicle_number}' => $data['vehicle_number'] ?? '',
+            '{eta}' => $data['eta'] ?? '',
+            '{total_price}' => $data['total_price'] ?? '',
+            '{address_from}' => $data['address_from'] ?? '',
+            '{address_to}' => $data['address_to'] ?? '',
+            '{booking_id}' => $data['booking_id'] ?? '',
+            '{cancellation_reason}' => $data['cancellation_reason'] ?? '',
+        );
+
+        return str_replace(array_keys($replacements), array_values($replacements), $template);
+    }
+
+    /**
+     * Sends webhook with retry mechanism (exponential backoff)
+     *
+     * @param string $url Webhook URL
+     * @param array $payload Webhook payload
+     * @param int $attempt Current attempt number (1-3)
+     */
+    private function send_webhook_with_retry($url, $payload, $attempt = 1) {
+        $max_attempts = 3;
+        $webhook_secret = get_option('cityride_webhook_secret', '');
+
+        $headers = array(
+            'Content-Type' => 'application/json',
+            'X-Webhook-Attempt' => $attempt,
+        );
+
+        if (!empty($webhook_secret)) {
+            $headers['X-Webhook-Secret'] = $webhook_secret;
+        }
+
+        $request_args = array(
+            'headers' => $headers,
+            'body' => json_encode($payload),
+            'timeout' => 10,
+            'blocking' => true,
+            'sslverify' => !(defined('WP_DEBUG') && WP_DEBUG),
+        );
+
+        $response = wp_remote_post($url, $request_args);
+
+        if (is_wp_error($response)) {
+            $error_message = $response->get_error_message();
+            error_log("CityRide: Webhook delivery failed (attempt {$attempt}/{$max_attempts}): {$error_message}");
+
+            // Schedule retry if under max attempts
+            if ($attempt < $max_attempts) {
+                $retry_delay = 60 * pow(2, $attempt - 1); // Exponential backoff: 60s, 120s, 240s
+                wp_schedule_single_event(
+                    time() + $retry_delay,
+                    'cityride_retry_webhook',
+                    array($url, $payload, $attempt + 1)
+                );
+                error_log("CityRide: Webhook retry scheduled in {$retry_delay} seconds");
+            }
+
+            // Store failed webhook for review
+            $this->log_webhook_failure($payload, $error_message, $attempt);
+            return false;
+        }
+
+        $response_code = wp_remote_retrieve_response_code($response);
+
+        if ($response_code >= 200 && $response_code < 300) {
+            error_log("CityRide: Webhook delivered successfully for event '{$payload['event']}' (booking #{$payload['booking_id']}) - HTTP {$response_code}");
+            return true;
+        } else {
+            error_log("CityRide: Webhook returned HTTP {$response_code} (attempt {$attempt}/{$max_attempts})");
+
+            // Retry on server errors (5xx)
+            if ($response_code >= 500 && $attempt < $max_attempts) {
+                $retry_delay = 60 * pow(2, $attempt - 1);
+                wp_schedule_single_event(
+                    time() + $retry_delay,
+                    'cityride_retry_webhook',
+                    array($url, $payload, $attempt + 1)
+                );
+            }
+
+            $this->log_webhook_failure($payload, "HTTP {$response_code}", $attempt);
+            return false;
+        }
+    }
+
+    /**
+     * Logs webhook failures for debugging
+     *
+     * @param array $payload Webhook payload that failed
+     * @param string $error Error message
+     * @param int $attempt Attempt number
+     */
+    private function log_webhook_failure($payload, $error, $attempt) {
+        $failures = get_option('cityride_webhook_failures', array());
+
+        // Keep only last 50 failures
+        if (count($failures) >= 50) {
+            array_shift($failures);
+        }
+
+        $failures[] = array(
+            'event' => $payload['event'],
+            'booking_id' => $payload['booking_id'],
+            'error' => $error,
+            'attempt' => $attempt,
+            'timestamp' => current_time('mysql'),
+        );
+
+        update_option('cityride_webhook_failures', $failures);
+    }
+
+    /**
+     * Cron handler for webhook retry
+     *
+     * @param string $url Webhook URL
+     * @param array $payload Webhook payload
+     * @param int $attempt Attempt number
+     */
+    public function cron_retry_webhook($url, $payload, $attempt) {
+        error_log("CityRide: Executing scheduled webhook retry (attempt {$attempt}) for event '{$payload['event']}', booking #{$payload['booking_id']}");
+        $this->send_webhook_with_retry($url, $payload, $attempt);
+    }
+
+    /**
      * Sends a test webhook notification to Make.com.
      */
     public function ajax_test_webhook() {
@@ -652,6 +1128,144 @@ class CityRideBooking {
 
         require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
         dbDelta($sql);
+
+        // Create drivers table
+        $this->create_drivers_table();
+
+        // Create discount codes table
+        $this->create_discount_codes_table();
+
+        // Run database migrations for new columns
+        $this->migrate_database_schema();
+    }
+
+    /**
+     * Creates the custom database table for CityRide drivers.
+     */
+    private function create_drivers_table() {
+        global $wpdb;
+
+        $table_name = $wpdb->prefix . 'cityride_drivers';
+        $charset_collate = $wpdb->get_charset_collate();
+
+        $sql = "CREATE TABLE $table_name (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            name varchar(255) NOT NULL,
+            phone varchar(50) NOT NULL,
+            vehicle_number varchar(50) NOT NULL,
+            vehicle_model varchar(100) DEFAULT NULL,
+            license_number varchar(100) DEFAULT NULL,
+            status enum('active','inactive','on_break') DEFAULT 'active',
+            total_rides int(11) DEFAULT 0,
+            total_earnings decimal(10,2) DEFAULT 0.00,
+            rating decimal(3,2) DEFAULT 5.00,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY vehicle_number (vehicle_number)
+        ) $charset_collate;";
+
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($sql);
+    }
+
+    /**
+     * Creates the discount codes table for promotional codes and special offers
+     */
+    private function create_discount_codes_table() {
+        global $wpdb;
+
+        $table_name = $wpdb->prefix . 'cityride_discount_codes';
+        $charset_collate = $wpdb->get_charset_collate();
+
+        $sql = "CREATE TABLE $table_name (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            code varchar(50) NOT NULL,
+            discount_type enum('percent','fixed') DEFAULT 'percent',
+            discount_value decimal(10,2) NOT NULL,
+            min_order_amount decimal(10,2) DEFAULT 0.00,
+            max_discount_amount decimal(10,2) DEFAULT NULL,
+            usage_limit int(11) DEFAULT NULL,
+            usage_count int(11) DEFAULT 0,
+            valid_from datetime DEFAULT NULL,
+            valid_until datetime DEFAULT NULL,
+            is_active tinyint(1) DEFAULT 1,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY code (code)
+        ) $charset_collate;";
+
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($sql);
+    }
+
+    /**
+     * Migrates database schema to add new columns for enhanced status management
+     * Adds: cancellation_reason, dispatcher_notes, status_changed_by, status_changed_at
+     * Adds: sms_delivery_status, sms_delivery_updated_at, infobip_message_id (for SMS tracking)
+     * Adds: discount_code, discount_amount, original_price, final_price (for pricing features)
+     * Updates status ENUM to include 'cancelled' and 'no_show'
+     */
+    private function migrate_database_schema() {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_rides';
+
+        // Check if migration is needed
+        $column_check = $wpdb->get_results("SHOW COLUMNS FROM $table_name LIKE 'cancellation_reason'");
+
+        if (empty($column_check)) {
+            // Add new columns
+            $wpdb->query("ALTER TABLE $table_name
+                ADD COLUMN cancellation_reason VARCHAR(500) DEFAULT NULL AFTER status,
+                ADD COLUMN dispatcher_notes TEXT DEFAULT NULL AFTER cancellation_reason,
+                ADD COLUMN status_changed_by VARCHAR(100) DEFAULT NULL AFTER dispatcher_notes,
+                ADD COLUMN status_changed_at DATETIME DEFAULT NULL AFTER status_changed_by
+            ");
+
+            error_log('CityRide: Database schema updated - added cancellation and audit columns');
+        }
+
+        // Check if SMS tracking columns exist
+        $sms_tracking_check = $wpdb->get_results("SHOW COLUMNS FROM $table_name LIKE 'sms_delivery_status'");
+
+        if (empty($sms_tracking_check)) {
+            // Add SMS delivery tracking columns
+            $wpdb->query("ALTER TABLE $table_name
+                ADD COLUMN sms_delivery_status VARCHAR(50) DEFAULT 'not_sent' AFTER status_changed_at,
+                ADD COLUMN sms_delivery_updated_at DATETIME DEFAULT NULL AFTER sms_delivery_status,
+                ADD COLUMN infobip_message_id VARCHAR(255) DEFAULT NULL AFTER sms_delivery_updated_at
+            ");
+
+            error_log('CityRide: Database schema updated - added SMS delivery tracking columns');
+        }
+
+        // Update status ENUM to include cancelled and no_show
+        $status_check = $wpdb->get_row("SHOW COLUMNS FROM $table_name LIKE 'status'");
+
+        if ($status_check && strpos($status_check->Type, 'cancelled') === false) {
+            $wpdb->query("ALTER TABLE $table_name
+                MODIFY COLUMN status ENUM('payed_unassigned', 'payed_assigned', 'completed', 'cancelled', 'no_show')
+                NOT NULL DEFAULT 'payed_unassigned'
+            ");
+
+            error_log('CityRide: Database schema updated - added cancelled and no_show statuses');
+        }
+
+        // Check if pricing columns exist
+        $pricing_check = $wpdb->get_results("SHOW COLUMNS FROM $table_name LIKE 'discount_code'");
+
+        if (empty($pricing_check)) {
+            // Add pricing and discount tracking columns
+            $wpdb->query("ALTER TABLE $table_name
+                ADD COLUMN discount_code VARCHAR(50) DEFAULT NULL AFTER total_price,
+                ADD COLUMN discount_amount DECIMAL(10,2) DEFAULT 0.00 AFTER discount_code,
+                ADD COLUMN original_price DECIMAL(10,2) DEFAULT NULL AFTER discount_amount,
+                ADD COLUMN final_price DECIMAL(10,2) DEFAULT NULL AFTER original_price
+            ");
+
+            error_log('CityRide: Database schema updated - added pricing and discount columns');
+        }
     }
 
     /**
@@ -666,6 +1280,33 @@ class CityRideBooking {
             array($this, 'admin_main_page'),
             'dashicons-car',
             30
+        );
+
+        add_submenu_page(
+            'cityride-booking',
+            'Vozači',
+            'Vozači',
+            'manage_options',
+            'cityride-drivers',
+            array($this, 'admin_drivers_page')
+        );
+
+        add_submenu_page(
+            'cityride-booking',
+            'Analitika',
+            'Analitika',
+            'manage_options',
+            'cityride-analytics',
+            array($this, 'admin_analytics_page')
+        );
+
+        add_submenu_page(
+            'cityride-booking',
+            'Kodovi Popusta',
+            'Kodovi Popusta',
+            'manage_options',
+            'cityride-discounts',
+            array($this, 'admin_discounts_page')
         );
 
         add_submenu_page(
@@ -694,6 +1335,30 @@ class CityRideBooking {
         register_setting('cityride_settings', 'cityride_enable_push_notifications');
         register_setting('cityride_settings', 'cityride_enable_webhook_notifications');
         register_setting('cityride_settings', 'cityride_stripe_webhook_secret');
+
+        // SMS Template Settings
+        register_setting('cityride_settings', 'cityride_sms_booking_confirmed');
+        register_setting('cityride_settings', 'cityride_sms_driver_assigned');
+        // REMOVED: cityride_sms_ride_completed - Passenger already at destination, unnecessary SMS
+        register_setting('cityride_settings', 'cityride_sms_ride_cancelled');
+
+        // SMS Enable/Disable Toggles
+        register_setting('cityride_settings', 'cityride_enable_sms_confirmed');
+        register_setting('cityride_settings', 'cityride_enable_sms_assigned');
+        // REMOVED: cityride_enable_sms_completed - Saves SMS costs, reduces spam
+        register_setting('cityride_settings', 'cityride_enable_sms_cancellation');
+
+        // Pricing and Surcharge Settings
+        register_setting('cityride_settings', 'cityride_minimum_fare');
+        register_setting('cityride_settings', 'cityride_night_surcharge_enabled');
+        register_setting('cityride_settings', 'cityride_night_surcharge_percent');
+        register_setting('cityride_settings', 'cityride_night_start_time');
+        register_setting('cityride_settings', 'cityride_night_end_time');
+        register_setting('cityride_settings', 'cityride_weekend_surcharge_enabled');
+        register_setting('cityride_settings', 'cityride_weekend_surcharge_percent');
+        register_setting('cityride_settings', 'cityride_holiday_surcharge_enabled');
+        register_setting('cityride_settings', 'cityride_holiday_surcharge_percent');
+        register_setting('cityride_settings', 'cityride_holiday_dates');
     }
 
    /**
@@ -713,6 +1378,12 @@ public function admin_enqueue_scripts($hook) {
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('cityride_admin_nonce')
         ));
+
+        // Load Chart.js and analytics script only on analytics page
+        if (strpos($hook, 'cityride-analytics') !== false) {
+            wp_enqueue_script('chartjs', 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js', array(), '4.4.0', true);
+            wp_enqueue_script('cityride-analytics-js', CITYRIDE_PLUGIN_URL . 'assets/analytics.js', array('jquery', 'chartjs'), time(), true);
+        }
     }
 }
 
@@ -827,10 +1498,41 @@ public function admin_enqueue_scripts($hook) {
                         </div>
                         <p class="disclaimer">Provjerite da su adrese ispravno označene na mapi – pogrešan broj ili naziv ulice može uticati na proračun.</p>
                     </div>
+
+                    <!-- Discount Code Section -->
+                    <div id="discount-code-section" class="discount-code-section" style="margin-top: 25px; display: none;">
+                        <label for="discount-code-input" style="display: block; font-weight: 700; margin-bottom: 10px; color: #444;">
+                            🎁 Imate kod popusta?
+                        </label>
+                        <div style="display: flex; gap: 10px; align-items: flex-start;">
+                            <input type="text" id="discount-code-input" placeholder="Unesite kod" style="flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 1rem; text-transform: uppercase;">
+                            <button type="button" id="apply-discount-btn" class="btn btn-primary" style="min-width: auto; padding: 12px 24px;">Primijeni</button>
+                        </div>
+                        <div id="discount-message" style="margin-top: 10px; font-weight: 600;"></div>
+                        <div id="discount-details" style="display: none; margin-top: 15px; padding: 15px; background: #e6ffe6; border-radius: 8px; border: 1px solid #4CAF50;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="color: #555;">Originalna cijena:</span>
+                                <span id="discount-original-price" style="text-decoration: line-through; color: #999;"></span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="color: #555; font-weight: 700;">Popust (<span id="discount-code-used"></span>):</span>
+                                <span id="discount-amount" style="color: #4CAF50; font-weight: 700;"></span>
+                            </div>
+                            <div style="border-top: 2px solid #4CAF50; margin: 10px 0; padding-top: 10px; display: flex; justify-content: space-between;">
+                                <span style="font-weight: 800; font-size: 1.1rem;">Nova cijena:</span>
+                                <span id="discount-final-price" style="font-weight: 900; font-size: 1.3rem; color: #E65100;"></span>
+                            </div>
+                            <button type="button" id="remove-discount-btn" class="btn" style="width: 100%; margin-top: 10px; padding: 8px; background: #f44336; color: white; min-width: auto;">
+                                Ukloni popust
+                            </button>
+                        </div>
+                    </div>
                 </div>
                 <input type="hidden" id="calculated_distance_km" name="distance_km">
                 <input type="hidden" id="calculated_total_price" name="total_price">
                 <input type="hidden" id="calculated_stripe_amount" name="stripe_amount">
+                <input type="hidden" id="discount_code_applied" name="discount_code">
+                <input type="hidden" id="discount_amount_applied" name="discount_amount" value="0">
 
                 <div id="payment-section" class="payment-section" style="display: none;"> <div class="payment-header">
                         <div class="card-icons">
@@ -969,6 +1671,7 @@ public function admin_enqueue_scripts($hook) {
                             <th>Udaljenost (km)</th>
                             <th>Cijena (BAM)</th>
                             <th>Status</th>
+                            <th>SMS Status</th>
                             <th>Putnik</th>
                             <th>Telefon</th>
                             <th>Vozač</th>
@@ -978,7 +1681,7 @@ public function admin_enqueue_scripts($hook) {
                         </tr>
                     </thead>
                     <tbody id="rides-table-body">
-                        <tr><td colspan="12" style="text-align:center;">Učitavam vožnje...</td></tr>
+                        <tr><td colspan="13" style="text-align:center;">Učitavam vožnje...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -998,8 +1701,14 @@ public function admin_enqueue_scripts($hook) {
                 <h2>Dodijeli Vozača</h2>
                 <form id="assign-driver-form">
                     <input type="hidden" id="assign-ride-id" name="ride_id">
-                    <label for="driver-vehicle-number">Broj vozila:</label>
-                    <input type="text" id="driver-vehicle-number" name="cab_driver_id" placeholder="Unesite broj vozila" required>
+
+                    <label for="driver-select">Odaberi Vozača:</label>
+                    <select id="driver-select" name="driver_id" required style="width: 100%; padding: 10px; margin-bottom: 15px;">
+                        <option value="">-- Učitavam vozače --</option>
+                    </select>
+                    <p class="description" style="margin-top: -10px; margin-bottom: 15px; font-size: 13px; color: #666;">
+                        Prikazuju se samo aktivni vozači. <a href="?page=cityride-drivers" target="_blank">Upravljaj vozačima</a>
+                    </p>
 
                     <label for="eta">ETA (Procijenjeno vrijeme dolaska):</label>
                     <input type="text" id="eta" name="eta" placeholder="Npr. 5 minuta" required>
@@ -1008,6 +1717,43 @@ public function admin_enqueue_scripts($hook) {
                     <div class="form-actions">
                         <button type="submit" class="button button-primary">Dodijeli</button>
                         <button type="button" class="button button-secondary cancel-modal">Poništi</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="cityride-modal" id="cancel-ride-modal" style="display: none;">
+                <span class="close">&times;</span>
+                <h2>Otkaži Vožnju</h2>
+                <form id="cancel-ride-form">
+                    <input type="hidden" id="cancel-ride-id" name="ride_id">
+
+                    <label for="cancel-reason-template">Razlog otkazivanja:</label>
+                    <select id="cancel-reason-template">
+                        <option value="Zahtjev kupca">Zahtjev kupca</option>
+                        <option value="Vozač nije dostupan">Vozač nije dostupan</option>
+                        <option value="Pogrešna adresa">Pogrešna adresa</option>
+                        <option value="Dupla rezervacija">Dupla rezervacija</option>
+                        <option value="Problem sa plaćanjem">Problem sa plaćanjem</option>
+                        <option value="Vremenski uvjeti">Vremenski uvjeti</option>
+                        <option value="other">Drugo (specificiraj)...</option>
+                    </select>
+
+                    <textarea id="cancel-reason-custom" placeholder="Unesite prilagođeni razlog" style="display:none; margin-top:10px; width: 100%; min-height: 60px;" rows="3"></textarea>
+
+                    <div style="margin-top: 15px;">
+                        <label>
+                            <input type="checkbox" id="process-refund" checked />
+                            <strong>Procesuiraj povrat novca putem Stripe-a</strong>
+                        </label>
+                        <p class="description" style="margin: 5px 0 0 25px; font-size: 12px; color: #666;">
+                            Ako je označeno, putniku će biti automatski vraćen novac.
+                        </p>
+                    </div>
+
+                    <div id="cancel-modal-message" style="margin-top: 15px;"></div>
+                    <div class="form-actions">
+                        <button type="submit" class="button" style="background: linear-gradient(45deg, #dc3545, #c82333); color: white; border: none;">Otkaži Vožnju</button>
+                        <button type="button" class="button button-secondary cancel-modal">Zatvori</button>
                     </div>
                 </form>
             </div>
@@ -1067,6 +1813,21 @@ public function admin_enqueue_scripts($hook) {
                             <p class="description">Secret key sent in X-Webhook-Secret header for authentication. Configure the same secret in your n8n webhook node (Header Auth).</p>
                         </td>
                     </tr>
+                    <tr valign="top" style="background: #f0f8ff; border-left: 4px solid #0073aa;">
+                        <th scope="row">📲 Infobip SMS Webhook URL</th>
+                        <td>
+                            <input type="text" value="<?php echo esc_url(get_rest_url(null, 'cityride/v1/infobip-webhook')); ?>" class="regular-text" readonly onclick="this.select(); document.execCommand('copy'); alert('Webhook URL copied!');" style="background: #fff; cursor: pointer;" />
+                            <p class="description">
+                                <strong>Kopirajte ovaj URL u Infobip Dashboard:</strong><br>
+                                1. Login to <a href="https://portal.infobip.com" target="_blank">Infobip Portal</a><br>
+                                2. Navigate to: <strong>Channels & Numbers → SMS → Delivery Reports</strong><br>
+                                3. Click <strong>"Add New Webhook"</strong><br>
+                                4. Paste URL above and enable events: <strong>DELIVERED, UNDELIVERABLE, REJECTED, EXPIRED</strong><br>
+                                5. Click <strong>Save</strong> - SMS delivery tracking will start working automatically!<br>
+                                <em>Napomena: Webhook ne zahtijeva autentifikaciju (Infobip verifikuje server-side).</em>
+                            </p>
+                        </td>
+                    </tr>
                     <tr valign="top">
                         <th scope="row">Startna tarifa (BAM)</th>
                         <td><input type="number" step="0.01" name="cityride_start_tariff" value="<?php echo esc_attr(get_option('cityride_start_tariff')); ?>" class="small-text" /></td>
@@ -1075,6 +1836,86 @@ public function admin_enqueue_scripts($hook) {
                         <th scope="row">Cijena po km (BAM)</th>
                         <td><input type="number" step="0.01" name="cityride_price_per_km" value="<?php echo esc_attr(get_option('cityride_price_per_km')); ?>" class="small-text" /></td>
                     </tr>
+                    <tr valign="top">
+                        <th scope="row">Minimalna cijena vožnje (BAM)</th>
+                        <td>
+                            <input type="number" step="0.01" name="cityride_minimum_fare" value="<?php echo esc_attr(get_option('cityride_minimum_fare')); ?>" class="small-text" />
+                            <p class="description">Minimalna cijena koja se naplaćuje bez obzira na udaljenost.</p>
+                        </td>
+                    </tr>
+                </table>
+
+                <h2 style="margin-top: 40px; border-top: 2px solid #eee; padding-top: 20px;">⏰ Dodaci na cijenu (Surcharges)</h2>
+                <p class="description" style="margin-bottom: 20px;">
+                    <strong>Konfigurirajte dodatke na cijenu za noćne vožnje, vikende i praznike.</strong><br>
+                    Dodaci se automatski primjenjuju na konačnu cijenu kada su ispunjeni uslovi.
+                </p>
+
+                <table class="form-table">
+                    <tr valign="top" style="background: #f0f8ff;">
+                        <th scope="row">🌙 Noćni dodatak</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="cityride_night_surcharge_enabled" value="1" <?php checked('1', get_option('cityride_night_surcharge_enabled')); ?> />
+                                Omogući noćni dodatak
+                            </label>
+                            <br><br>
+                            <label>
+                                Dodatak (%):
+                                <input type="number" step="1" min="0" max="100" name="cityride_night_surcharge_percent" value="<?php echo esc_attr(get_option('cityride_night_surcharge_percent')); ?>" class="small-text" />%
+                            </label>
+                            <br><br>
+                            <label>
+                                Početak noćnog perioda:
+                                <input type="time" name="cityride_night_start_time" value="<?php echo esc_attr(get_option('cityride_night_start_time')); ?>" />
+                            </label>
+                            <label style="margin-left: 20px;">
+                                Kraj noćnog perioda:
+                                <input type="time" name="cityride_night_end_time" value="<?php echo esc_attr(get_option('cityride_night_end_time')); ?>" />
+                            </label>
+                            <p class="description">Primjer: 22:00 - 06:00 za 20% dodatak na vožnje u noćnim satima.</p>
+                        </td>
+                    </tr>
+
+                    <tr valign="top" style="background: #fffaf0;">
+                        <th scope="row">🎉 Vikend dodatak</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="cityride_weekend_surcharge_enabled" value="1" <?php checked('1', get_option('cityride_weekend_surcharge_enabled')); ?> />
+                                Omogući vikend dodatak
+                            </label>
+                            <br><br>
+                            <label>
+                                Dodatak (%):
+                                <input type="number" step="1" min="0" max="100" name="cityride_weekend_surcharge_percent" value="<?php echo esc_attr(get_option('cityride_weekend_surcharge_percent')); ?>" class="small-text" />%
+                            </label>
+                            <p class="description">Primjenjuje se subotom i nedjeljom.</p>
+                        </td>
+                    </tr>
+
+                    <tr valign="top" style="background: #fff5f5;">
+                        <th scope="row">🎊 Dodatak za praznike</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="cityride_holiday_surcharge_enabled" value="1" <?php checked('1', get_option('cityride_holiday_surcharge_enabled')); ?> />
+                                Omogući dodatak za praznike
+                            </label>
+                            <br><br>
+                            <label>
+                                Dodatak (%):
+                                <input type="number" step="1" min="0" max="100" name="cityride_holiday_surcharge_percent" value="<?php echo esc_attr(get_option('cityride_holiday_surcharge_percent')); ?>" class="small-text" />%
+                            </label>
+                            <br><br>
+                            <label>
+                                Datumi praznika (odvojeni zarezom):
+                                <textarea name="cityride_holiday_dates" rows="3" class="large-text" placeholder="2026-01-01, 2026-01-07, 2026-05-01, 2026-05-09"><?php echo esc_textarea(get_option('cityride_holiday_dates')); ?></textarea>
+                            </label>
+                            <p class="description">Unesite datume u formatu YYYY-MM-DD, odvojene zarezom. Primjer: 2026-01-01, 2026-01-07 (Nova Godina, Božić)</p>
+                        </td>
+                    </tr>
+                </table>
+
+                <table class="form-table">
                     <tr valign="top">
                         <th scope="row">Omogući Push Notifikacije (OneSignal)</th>
                         <td>
@@ -1129,6 +1970,54 @@ public function admin_enqueue_scripts($hook) {
                                     Nema zabilježenog statusa. Omogućite WP_DEBUG u <code>wp-config.php</code> da vidite status webhooks-a.
                                 </p>
                             <?php } ?>
+                        </td>
+                    </tr>
+                </table>
+
+                <h2 style="margin-top: 40px; border-top: 2px solid #eee; padding-top: 20px;">SMS Predlošci (n8n + Infobip)</h2>
+                <p class="description" style="margin-bottom: 20px;">
+                    <strong>💰 Optimizovano za smanjenje troškova SMS-a (50% uštede)</strong><br>
+                    Konfigurirajte SMS poruke koje će n8n slati putem Infobip-a. Koristite varijable: <strong>{passenger_name}</strong>, <strong>{driver_name}</strong>, <strong>{vehicle_number}</strong>, <strong>{eta}</strong>, <strong>{total_price}</strong>, <strong>{address_from}</strong>, <strong>{address_to}</strong>, <strong>{booking_id}</strong>, <strong>{cancellation_reason}</strong><br>
+                    <em>Napomena: SMS "Vožnja završena" je uklonjen jer putnik već zna da je vožnja gotova (nepotreban trošak).</em>
+                </p>
+
+                <table class="form-table">
+                    <tr valign="top">
+                        <th scope="row">SMS: Rezervacija potvrđena</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="cityride_enable_sms_confirmed" value="yes" <?php checked('yes', get_option('cityride_enable_sms_confirmed', 'yes')); ?> />
+                                Omogući
+                            </label>
+                            <br><br>
+                            <textarea name="cityride_sms_booking_confirmed" rows="3" class="large-text" placeholder="Primer: Vaša rezervacija je potvrđena! Od: {address_from} Do: {address_to}. Cijena: {total_price}."><?php echo esc_textarea(get_option('cityride_sms_booking_confirmed', 'Vaša rezervacija je potvrđena! Od: {address_from} Do: {address_to}. Cijena: {total_price}. Taksi će uskoro biti dodijeljen.')); ?></textarea>
+                            <p class="description">Šalje se odmah nakon uspješne rezervacije i plaćanja.</p>
+                        </td>
+                    </tr>
+
+                    <tr valign="top">
+                        <th scope="row">SMS: Vozač dodijeljen</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="cityride_enable_sms_assigned" value="yes" <?php checked('yes', get_option('cityride_enable_sms_assigned', 'yes')); ?> />
+                                Omogući
+                            </label>
+                            <br><br>
+                            <textarea name="cityride_sms_driver_assigned" rows="3" class="large-text" placeholder="Primer: Taksi {vehicle_number} ({driver_name}) je na putu! ETA: {eta}."><?php echo esc_textarea(get_option('cityride_sms_driver_assigned', 'Taksi {vehicle_number} ({driver_name}) je na putu! Procijenjeno vrijeme dolaska: {eta}.')); ?></textarea>
+                            <p class="description">Šalje se kada dispečer dodijeli vozača vožnji.</p>
+                        </td>
+                    </tr>
+
+                    <tr valign="top">
+                        <th scope="row">SMS: Rezervacija otkazana</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="cityride_enable_sms_cancellation" value="yes" <?php checked('yes', get_option('cityride_enable_sms_cancellation', 'yes')); ?> />
+                                Omogući
+                            </label>
+                            <br><br>
+                            <textarea name="cityride_sms_ride_cancelled" rows="3" class="large-text" placeholder="Primer: Vaša rezervacija #{booking_id} je otkazana. Razlog: {cancellation_reason}."><?php echo esc_textarea(get_option('cityride_sms_ride_cancelled', 'Vaša rezervacija #{booking_id} je otkazana. Razlog: {cancellation_reason}. Za dodatna pitanja kontaktirajte nas.')); ?></textarea>
+                            <p class="description">⚠️ Šalje se SAMO kada dispečer otkaže vožnju. Ne šalje se ako kupac otkaže (jer oni već znaju).</p>
                         </td>
                     </tr>
                 </table>
@@ -1240,16 +2129,38 @@ public function admin_enqueue_scripts($hook) {
                     case 'payed_unassigned':
                         $status_class = 'status-unassigned';
                         $action_buttons = '<button class="button assign-driver-btn" data-ride-id="' . esc_attr($ride->id) . '">Dodijeli</button>';
+                        $action_buttons .= ' <button class="button cancel-ride-btn" data-ride-id="' . esc_attr($ride->id) . '" style="background: linear-gradient(45deg, #dc3545, #c82333); color: white; border: none;">Otkaži</button>';
                         break;
                     case 'payed_assigned':
                         $status_class = 'status-assigned';
                         $action_buttons = '<button class="button button-primary complete-ride-btn" data-ride-id="' . esc_attr($ride->id) . '">Završi</button>';
+                        $action_buttons .= ' <button class="button cancel-ride-btn" data-ride-id="' . esc_attr($ride->id) . '" style="background: linear-gradient(45deg, #dc3545, #c82333); color: white; border: none;">Otkaži</button>';
                         break;
                     case 'completed':
                         $status_class = 'status-completed';
                         $action_buttons = ''; // No actions for completed rides
                         break;
+                    case 'cancelled':
+                        $status_class = 'status-cancelled';
+                        $action_buttons = '<span style="color: #666; font-style: italic;">Otkazana</span>';
+                        if (!empty($ride->cancellation_reason)) {
+                            $action_buttons .= '<br><small style="color: #999;">Razlog: ' . esc_html($ride->cancellation_reason) . '</small>';
+                        }
+                        break;
+                    case 'no_show':
+                        $status_class = 'status-no-show';
+                        $action_buttons = '<span style="color: #666; font-style: italic;">Nije se pojavio</span>';
+                        break;
+                    default:
+                        $status_class = '';
+                        $action_buttons = '';
+                        break;
                 }
+
+                // Generate SMS status badge
+                $sms_status = $ride->sms_delivery_status ?? 'not_sent';
+                $sms_status_label = $this->get_sms_status_label($sms_status);
+                $sms_status_badge = '<span class="sms-status sms-status-' . esc_attr($sms_status) . '">' . esc_html($sms_status_label) . '</span>';
 
                 $rides_html .= '<tr>';
                 $rides_html .= '<td data-label="ID">' . esc_html($ride->id) . '</td>';
@@ -1258,6 +2169,7 @@ public function admin_enqueue_scripts($hook) {
                 $rides_html .= '<td data-label="Udaljenost (km)">' . esc_html(number_format($ride->distance_km, 2)) . '</td>';
                 $rides_html .= '<td data-label="Cijena (BAM)">' . esc_html(number_format($ride->total_price, 2)) . '</td>';
                 $rides_html .= '<td data-label="Status" class="status ' . esc_attr($status_class) . '">' . esc_html($this->get_status_label($ride->status)) . '</td>';
+                $rides_html .= '<td data-label="SMS Status">' . $sms_status_badge . '</td>';
                 $rides_html .= '<td data-label="Putnik">' . esc_html($ride->passenger_name) . '</td>';
                 $rides_html .= '<td data-label="Telefon">' . esc_html($ride->passenger_phone) . '</td>';
                 $rides_html .= '<td data-label="Vozač">' . (empty($ride->cab_driver_id) ? 'Nije dodijeljen' : esc_html($ride->cab_driver_id)) . '</td>';
@@ -1267,7 +2179,7 @@ public function admin_enqueue_scripts($hook) {
                 $rides_html .= '</tr>';
             }
         } else {
-            $rides_html = '<tr><td colspan="12" style="text-align:center; padding: 40px;">Nema pronađenih vožnji.</td></tr>';
+            $rides_html = '<tr><td colspan="13" style="text-align:center; padding: 40px;">Nema pronađenih vožnji.</td></tr>';
         }
 
         // Generate pagination links
@@ -1304,8 +2216,34 @@ public function admin_enqueue_scripts($hook) {
                 return 'Plaćena (Dodijeljena)';
             case 'completed':
                 return 'Završena';
+            case 'cancelled':
+                return 'Otkazana';
+            case 'no_show':
+                return 'Nije se pojavio';
             default:
                 return ucfirst(str_replace('_', ' ', $status));
+        }
+    }
+
+    /**
+     * Helper function to get SMS delivery status label for display.
+     */
+    private function get_sms_status_label($sms_status) {
+        switch ($sms_status) {
+            case 'delivered':
+                return '✓ Dostavljeno';
+            case 'pending':
+                return '⏳ Na čekanju';
+            case 'failed':
+                return '✗ Neuspjelo';
+            case 'rejected':
+                return '🚫 Odbijeno';
+            case 'not_sent':
+                return '— Nije poslano';
+            case 'unknown':
+                return '? Nepoznato';
+            default:
+                return '—';
         }
     }
 
@@ -1390,16 +2328,26 @@ public function admin_enqueue_scripts($hook) {
             wp_send_json_error('Nemate ovlaštenje za dodjelu vozača.');
         }
 
-        $ride_id = intval($_POST['ride_id']); // Ovo je ID vožnje iz baze podataka
-        $cab_driver_id = sanitize_text_field($_POST['cab_driver_id']); // Ovo je ono što se prikazuje kao 'broj taksija'
+        $ride_id = intval($_POST['ride_id']);
+        $driver_id = intval($_POST['driver_id']);
         $eta = sanitize_text_field($_POST['eta']);
 
-        if (empty($ride_id) || empty($cab_driver_id) || empty($eta)) {
-            wp_send_json_error('Svi podaci su obavezni (ID vožnje, broj vozila, ETA).');
+        if (empty($ride_id) || empty($driver_id) || empty($eta)) {
+            wp_send_json_error('Svi podaci su obavezni (ID vožnje, vozač, ETA).');
         }
 
         global $wpdb;
         $table_name = $wpdb->prefix . 'cityride_rides';
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+
+        // Fetch driver details
+        $driver = $wpdb->get_row($wpdb->prepare("SELECT * FROM $drivers_table WHERE id = %d", $driver_id));
+
+        if (!$driver) {
+            wp_send_json_error('Vozač nije pronađen.');
+        }
+
+        $cab_driver_id = $driver->vehicle_number; // Use vehicle number for compatibility
 
         // Dohvati trenutni status vožnje i passenger_onesignal_id PRIJE ažuriranja
         $ride_data = $wpdb->get_row($wpdb->prepare("SELECT status, passenger_onesignal_id FROM $table_name WHERE id = %d", $ride_id));
@@ -1428,25 +2376,33 @@ public function admin_enqueue_scripts($hook) {
             // i pošalji notifikaciju SAMO ako je došlo do promjene i ako je prethodni status bio 'payed_unassigned'
             if ($current_status === 'payed_unassigned') {
 
+                // Fetch full ride details for webhook
+                $ride = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $ride_id), ARRAY_A);
+
+                // Send driver_assigned webhook event
+                if (get_option('cityride_enable_webhook_notifications') === '1' && $ride) {
+                    $ride['driver_name'] = ''; // Can be populated if you have driver names in database
+                    $this->send_event_webhook('driver_assigned', $ride);
+                    error_log("CityRide: driver_assigned webhook sent for ride {$ride_id}");
+                }
+
                 // Provjeri da li su push notifikacije omogućene u opcijama i da li imamo Player ID
-                $enable_push_notifications = get_option('cityride_enable_push_notifications', '0'); // Pretpostavljamo da imate ovu opciju
+                $enable_push_notifications = get_option('cityride_enable_push_notifications', '0');
 
                 if ($enable_push_notifications === '1' && !empty($passenger_onesignal_id)) {
                     $notification_title = 'Vaša vožnja je dodijeljena!';
                     // Format poruke: Taksi #ID_VOZILA je na putu! Procijenjeno vrijeme dolaska: X minuta.
-                    // Koristimo $cab_driver_id kao broj taksija u poruci
                     $notification_message = sprintf('Taksi #%s je na putu! Procijenjeno vrijeme dolaska: %s minuta.',
-                        $cab_driver_id, // Koristi se kao prikazani broj taksija
+                        $cab_driver_id,
                         $eta
                     );
 
                     // Pozivamo send_onesignal_notification metodu
-                    // Očekuje $player_ids (niz), $title, $message, $url (opcionalno)
                     $this->send_onesignal_notification(
                         [$passenger_onesignal_id], // Player ID ide kao niz
                         $notification_title,
                         $notification_message,
-                        '' // Opcionalno, dodajte URL ako imate stranicu za praćenje
+                        ''
                     );
 
                     error_log("CityRide: OneSignal notification sent for ride {$ride_id} (Cab: {$cab_driver_id}, ETA: {$eta}) to {$passenger_onesignal_id}");
@@ -1495,13 +2451,159 @@ public function admin_enqueue_scripts($hook) {
             error_log('CityRide: Database update failed in ajax_complete_ride: ' . $wpdb->last_error);
             wp_send_json_error('Greška pri završetku vožnje.');
         } else {
-            // Fetch the updated ride to get passenger_onesignal_id
-            $ride = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $ride_id));
-            if ($ride && get_option('cityride_enable_push_notifications') === '1' && !empty($ride->passenger_onesignal_id)) {
-                $message = "Vaša vožnja ({$ride->address_from} do {$ride->address_to}) je uspješno završena! Hvala Vam na korištenju CityRide-a.";
-                $this->send_onesignal_notification([$ride->passenger_onesignal_id], 'Vožnja završena!', $message); // Fixed to pass array
+            // Fetch the updated ride for notifications
+            $ride = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $ride_id), ARRAY_A);
+
+            if ($ride) {
+                // REMOVED: ride_completed SMS webhook - Passenger already at destination, unnecessary notification
+                // Reason: Wastes SMS cost, no value added (passenger knows ride is complete)
+                // if (get_option('cityride_enable_webhook_notifications') === '1') {
+                //     $ride['driver_name'] = '';
+                //     $this->send_event_webhook('ride_completed', $ride);
+                //     error_log("CityRide: ride_completed webhook sent for ride {$ride_id}");
+                // }
+
+                // Keep OneSignal push notification (optional, low cost)
+                if (get_option('cityride_enable_push_notifications') === '1' && !empty($ride['passenger_onesignal_id'])) {
+                    $message = "Vaša vožnja ({$ride['address_from']} do {$ride['address_to']}) je uspješno završena! Hvala Vam na korištenju CityRide-a.";
+                    $this->send_onesignal_notification([$ride['passenger_onesignal_id']], 'Vožnja završena!', $message);
+                }
+
+                // Update driver earnings and ride count
+                if (!empty($ride['cab_driver_id'])) {
+                    $this->update_driver_earnings($ride['cab_driver_id'], $ride['total_price']);
+                }
             }
+
             wp_send_json_success('Vožnja uspješno završena.');
+        }
+    }
+
+    /**
+     * AJAX handler for cancelling a ride with reason
+     * Marks ride as cancelled, sends webhook notification, and optionally processes refund
+     */
+    public function ajax_cancel_ride() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Nemate ovlaštenje za otkazivanje vožnje.');
+        }
+
+        $ride_id = intval($_POST['ride_id']);
+        $cancellation_reason = sanitize_text_field($_POST['cancellation_reason']);
+        $process_refund = isset($_POST['process_refund']) && $_POST['process_refund'] === 'true';
+
+        if (empty($ride_id)) {
+            wp_send_json_error('ID vožnje je obavezan.');
+        }
+
+        if (empty($cancellation_reason)) {
+            wp_send_json_error('Razlog otkazivanja je obavezan.');
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_rides';
+
+        // Get ride details before cancellation
+        $ride = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $ride_id), ARRAY_A);
+
+        if (!$ride) {
+            wp_send_json_error('Vožnja nije pronađena.');
+        }
+
+        // Check if ride can be cancelled (not already completed or cancelled)
+        if (in_array($ride['status'], array('completed', 'cancelled', 'no_show'))) {
+            wp_send_json_error('Ova vožnja ne može biti otkazana (status: ' . $ride['status'] . ').');
+        }
+
+        // Get current dispatcher name
+        $dispatcher_name = wp_get_current_user()->display_name;
+
+        // Update ride status to cancelled
+        $updated = $wpdb->update(
+            $table_name,
+            array(
+                'status' => 'cancelled',
+                'cancellation_reason' => $cancellation_reason,
+                'status_changed_by' => $dispatcher_name,
+                'status_changed_at' => current_time('mysql'),
+                'updated_at' => current_time('mysql')
+            ),
+            array('id' => $ride_id),
+            array('%s', '%s', '%s', '%s', '%s'),
+            array('%d')
+        );
+
+        if ($updated === false) {
+            error_log('CityRide: Database update failed in ajax_cancel_ride: ' . $wpdb->last_error);
+            wp_send_json_error('Greška pri otkazivanju vožnje.');
+        }
+
+        // Add cancellation reason to ride data for webhook
+        $ride['cancellation_reason'] = $cancellation_reason;
+        $ride['id'] = $ride_id;
+
+        // Send ride_cancelled webhook event
+        if (get_option('cityride_enable_webhook_notifications') === '1') {
+            $this->send_event_webhook('ride_cancelled', $ride);
+            error_log("CityRide: ride_cancelled webhook sent for ride {$ride_id}");
+        }
+
+        // Process refund if requested and Stripe payment exists
+        $refund_status = 'not_processed';
+        if ($process_refund && !empty($ride['stripe_payment_id'])) {
+            $refund_result = $this->process_stripe_refund($ride['stripe_payment_id']);
+
+            if ($refund_result['success']) {
+                $refund_status = 'refunded';
+                error_log("CityRide: Stripe refund successful for ride {$ride_id}, payment {$ride['stripe_payment_id']}");
+            } else {
+                $refund_status = 'refund_failed';
+                error_log("CityRide: Stripe refund failed for ride {$ride_id}: " . $refund_result['error']);
+            }
+        }
+
+        wp_send_json_success(array(
+            'message' => 'Vožnja uspješno otkazana.',
+            'ride_id' => $ride_id,
+            'refund_status' => $refund_status
+        ));
+    }
+
+    /**
+     * Processes a Stripe refund for a cancelled ride
+     *
+     * @param string $payment_intent_id Stripe PaymentIntent ID
+     * @return array Result with 'success' boolean and 'error' message if failed
+     */
+    private function process_stripe_refund($payment_intent_id) {
+        try {
+            $stripe_secret_key = get_option('cityride_stripe_secret_key');
+
+            if (empty($stripe_secret_key)) {
+                return array('success' => false, 'error' => 'Stripe secret key not configured');
+            }
+
+            require_once plugin_dir_path(__FILE__) . 'vendor/autoload.php';
+            \Stripe\Stripe::setApiKey($stripe_secret_key);
+
+            // Create refund
+            $refund = \Stripe\Refund::create([
+                'payment_intent' => $payment_intent_id,
+                'reason' => 'requested_by_customer',
+            ]);
+
+            if ($refund->status === 'succeeded' || $refund->status === 'pending') {
+                return array('success' => true, 'refund_id' => $refund->id);
+            } else {
+                return array('success' => false, 'error' => 'Refund status: ' . $refund->status);
+            }
+
+        } catch (\Stripe\Exception\ApiErrorException $e) {
+            return array('success' => false, 'error' => $e->getMessage());
+        } catch (Exception $e) {
+            return array('success' => false, 'error' => $e->getMessage());
         }
     }
 
@@ -1749,6 +2851,183 @@ public function admin_enqueue_scripts($hook) {
     }
 
     /**
+     * Registers the REST API endpoint for Infobip SMS Delivery Webhooks.
+     */
+    public function register_infobip_webhook_endpoint() {
+        register_rest_route('cityride/v1', '/infobip-webhook', array(
+            'methods' => 'POST',
+            'callback' => array($this, 'handle_infobip_webhook'),
+            'permission_callback' => '__return_true', // Infobip webhooks don't use WP nonces/auth
+        ));
+    }
+
+    /**
+     * Handles incoming Infobip SMS delivery status webhooks.
+     * Updates ride SMS delivery status based on Infobip callbacks.
+     *
+     * Expected Infobip webhook payload:
+     * {
+     *   "results": [{
+     *     "messageId": "...",
+     *     "status": { "groupId": 3, "groupName": "DELIVERED", "id": 5, "name": "DELIVERED_TO_HANDSET" },
+     *     "price": { "pricePerMessage": 0.05, "currency": "EUR" },
+     *     "sentAt": "2024-01-15T10:30:00.000+0000",
+     *     "doneAt": "2024-01-15T10:30:05.000+0000",
+     *     "to": "38761234567"
+     *   }]
+     * }
+     */
+    public function handle_infobip_webhook(WP_REST_Request $request) {
+        $payload = $request->get_json_params();
+
+        // Log received webhook for debugging
+        error_log('CityRide Infobip Webhook: Received payload: ' . json_encode($payload));
+
+        // Validate basic structure
+        if (!isset($payload['results']) || !is_array($payload['results'])) {
+            error_log('CityRide Infobip Webhook: Invalid payload structure');
+            return new WP_REST_Response('Invalid payload', 400);
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_rides';
+
+        // Process each result
+        foreach ($payload['results'] as $result) {
+            $message_id = $result['messageId'] ?? null;
+            $status = $result['status']['groupName'] ?? null;
+            $phone_number = $result['to'] ?? null;
+            $done_at = $result['doneAt'] ?? null;
+
+            if (!$message_id || !$status) {
+                error_log('CityRide Infobip Webhook: Missing messageId or status in result');
+                continue;
+            }
+
+            // Map Infobip status to our internal status
+            $internal_status = $this->map_infobip_status($status);
+
+            // Find ride by Infobip message ID or phone number
+            $ride = $wpdb->get_row($wpdb->prepare(
+                "SELECT id, passenger_phone, sms_delivery_status FROM $table_name
+                 WHERE infobip_message_id = %s OR passenger_phone LIKE %s
+                 ORDER BY created_at DESC LIMIT 1",
+                $message_id,
+                '%' . substr($phone_number, -8) . '%' // Match last 8 digits
+            ));
+
+            if ($ride) {
+                // Update SMS delivery status
+                $updated = $wpdb->update(
+                    $table_name,
+                    array(
+                        'sms_delivery_status' => $internal_status,
+                        'sms_delivery_updated_at' => current_time('mysql'),
+                        'infobip_message_id' => $message_id
+                    ),
+                    array('id' => $ride->id),
+                    array('%s', '%s', '%s'),
+                    array('%d')
+                );
+
+                if ($updated !== false) {
+                    error_log("CityRide Infobip Webhook: Updated ride {$ride->id} SMS status to {$internal_status} (Infobip: {$status})");
+                } else {
+                    error_log("CityRide Infobip Webhook: Failed to update ride {$ride->id}: " . $wpdb->last_error);
+                }
+            } else {
+                error_log("CityRide Infobip Webhook: No ride found for message ID {$message_id} or phone {$phone_number}");
+            }
+        }
+
+        return new WP_REST_Response('OK', 200);
+    }
+
+    /**
+     * Maps Infobip status names to internal status values
+     *
+     * @param string $infobip_status Infobip status groupName
+     * @return string Internal status value
+     */
+    private function map_infobip_status($infobip_status) {
+        $status_map = array(
+            'PENDING' => 'pending',
+            'DELIVERED' => 'delivered',
+            'UNDELIVERABLE' => 'failed',
+            'REJECTED' => 'rejected',
+            'EXPIRED' => 'failed'
+        );
+
+        return $status_map[$infobip_status] ?? 'unknown';
+    }
+
+    /**
+     * Registers the REST API endpoint for n8n to report Infobip message IDs
+     */
+    public function register_infobip_message_id_endpoint() {
+        register_rest_route('cityride/v1', '/infobip-message-id', array(
+            'methods' => 'POST',
+            'callback' => array($this, 'handle_infobip_message_id'),
+            'permission_callback' => '__return_true',
+        ));
+    }
+
+    /**
+     * Handles n8n callback with Infobip message ID after sending SMS
+     * This allows linking the ride to the Infobip message for delivery tracking
+     *
+     * Expected payload from n8n:
+     * {
+     *   "booking_id": 123,
+     *   "message_id": "abc123def456",
+     *   "phone_number": "+38761234567"
+     * }
+     */
+    public function handle_infobip_message_id(WP_REST_Request $request) {
+        $payload = $request->get_json_params();
+
+        error_log('CityRide: Received Infobip message ID callback: ' . json_encode($payload));
+
+        // Validate payload
+        if (!isset($payload['booking_id']) || !isset($payload['message_id'])) {
+            error_log('CityRide: Missing booking_id or message_id in payload');
+            return new WP_REST_Response('Missing required fields', 400);
+        }
+
+        $booking_id = intval($payload['booking_id']);
+        $message_id = sanitize_text_field($payload['message_id']);
+
+        if ($booking_id <= 0 || empty($message_id)) {
+            error_log('CityRide: Invalid booking_id or message_id');
+            return new WP_REST_Response('Invalid data', 400);
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_rides';
+
+        // Update ride with Infobip message ID and set status to pending
+        $updated = $wpdb->update(
+            $table_name,
+            array(
+                'infobip_message_id' => $message_id,
+                'sms_delivery_status' => 'pending',
+                'sms_delivery_updated_at' => current_time('mysql')
+            ),
+            array('id' => $booking_id),
+            array('%s', '%s', '%s'),
+            array('%d')
+        );
+
+        if ($updated === false) {
+            error_log("CityRide: Failed to update booking {$booking_id} with message ID {$message_id}: " . $wpdb->last_error);
+            return new WP_REST_Response('Database update failed', 500);
+        }
+
+        error_log("CityRide: Successfully linked booking {$booking_id} to Infobip message {$message_id}");
+        return new WP_REST_Response('OK', 200);
+    }
+
+    /**
      * Sends a push notification using OneSignal REST API.
      *
      * @param string|array $player_ids Single player ID or array of player IDs.
@@ -1816,6 +3095,1352 @@ public function admin_enqueue_scripts($hook) {
                 error_log('OneSignal notification sent successfully. Response: ' . $response);
             }
         }
+    }
+
+    /**
+     * ============================================
+     * DRIVER POOL MANAGEMENT - WEEK 3
+     * ============================================
+     */
+
+    /**
+     * Admin page for managing drivers
+     */
+    public function admin_drivers_page() {
+        if (!current_user_can('manage_options')) {
+            wp_die(__('Nemate dovoljna prava za pristup ovoj stranici.'));
+        }
+        ?>
+        <div class="wrap cityride-admin-page">
+            <h1 class="wp-heading-inline">Upravljanje Vozačima</h1>
+            <button type="button" class="page-title-action" id="add-driver-btn">Dodaj Novog Vozača</button>
+            <hr class="wp-header-end">
+
+            <div id="cityride-admin-message" class="notice" style="display: none;"></div>
+
+            <!-- Driver Statistics Widgets -->
+            <div class="cityride-dashboard-widgets" style="margin-bottom: 30px;">
+                <div class="cityride-dashboard-widget stat-box">
+                    <div class="stat-icon">🚗</div>
+                    <div class="stat-content">
+                        <h3>Ukupno Vozača</h3>
+                        <p class="stat-number" id="stat-total-drivers">0</p>
+                    </div>
+                </div>
+                <div class="cityride-dashboard-widget stat-box">
+                    <div class="stat-icon">✅</div>
+                    <div class="stat-content">
+                        <h3>Aktivni Vozači</h3>
+                        <p class="stat-number" id="stat-active-drivers">0</p>
+                    </div>
+                </div>
+                <div class="cityride-dashboard-widget stat-box">
+                    <div class="stat-icon">💰</div>
+                    <div class="stat-content">
+                        <h3>Ukupna Zarada</h3>
+                        <p class="stat-number" id="stat-total-driver-earnings">0.00 BAM</p>
+                    </div>
+                </div>
+                <div class="cityride-dashboard-widget stat-box">
+                    <div class="stat-icon">🏆</div>
+                    <div class="stat-content">
+                        <h3>Najbolji Vozač</h3>
+                        <p class="stat-number" id="stat-top-driver">-</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Driver Earnings Export Section -->
+            <div style="background: #fff; padding: 20px; margin-bottom: 20px; border-radius: 8px; border: 1px solid #e0e0e0;">
+                <h3 style="margin-top: 0;">📊 Izvještaj Zarade Vozača</h3>
+                <form id="driver-earnings-export-form" style="display: flex; gap: 15px; flex-wrap: wrap; align-items: flex-end;">
+                    <div class="form-group" style="flex: 1; min-width: 200px;">
+                        <label for="export-driver-select">Odaberi Vozača:</label>
+                        <select id="export-driver-select" name="driver_id" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            <option value="">-- Odaberi vozača --</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 150px;">
+                        <label for="export-date-range">Period:</label>
+                        <select id="export-date-range" name="date_range" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            <option value="this_month">Ovaj Mjesec</option>
+                            <option value="last_month">Prošli Mjesec</option>
+                            <option value="this_year">Ova Godina</option>
+                            <option value="custom">Prilagođeni Period</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="export-custom-dates" style="display: none; flex: 1; min-width: 200px;">
+                        <label for="export-start-date">Od:</label>
+                        <input type="date" id="export-start-date" name="start_date" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                    <div class="form-group" id="export-custom-dates-to" style="display: none; flex: 1; min-width: 200px;">
+                        <label for="export-end-date">Do:</label>
+                        <input type="date" id="export-end-date" name="end_date" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                    <button type="submit" class="button button-primary" style="padding: 8px 20px;">
+                        <span class="dashicons dashicons-download" style="margin-top: 3px;"></span> Preuzmi Izvještaj
+                    </button>
+                </form>
+            </div>
+
+            <!-- Drivers Table -->
+            <div class="cityride-table-container">
+                <table class="wp-list-table widefat fixed striped">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Ime</th>
+                            <th>Telefon</th>
+                            <th>Broj Vozila</th>
+                            <th>Model</th>
+                            <th>Status</th>
+                            <th>Ukupno Vožnji</th>
+                            <th>Zarada</th>
+                            <th>Rejting</th>
+                            <th>Akcije</th>
+                        </tr>
+                    </thead>
+                    <tbody id="drivers-table-body">
+                        <tr><td colspan="10" style="text-align:center;">Učitavam vozače...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Add/Edit Driver Modal -->
+            <div class="cityride-modal" id="driver-modal" style="display: none;">
+                <div class="cityride-modal-content">
+                    <span class="close" id="close-driver-modal">&times;</span>
+                    <h2 id="driver-modal-title">Dodaj Vozača</h2>
+                    <form id="driver-form">
+                        <input type="hidden" id="driver-id" name="driver_id" value="">
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="driver-name">Ime i Prezime *</label>
+                                <input type="text" id="driver-name" name="name" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="driver-phone">Telefon *</label>
+                                <input type="tel" id="driver-phone" name="phone" required placeholder="+387 61 234 567">
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="driver-vehicle-number">Broj Vozila (Tablica) *</label>
+                                <input type="text" id="driver-vehicle-number" name="vehicle_number" required placeholder="SA 123 AB">
+                            </div>
+                            <div class="form-group">
+                                <label for="driver-vehicle-model">Model Vozila</label>
+                                <input type="text" id="driver-vehicle-model" name="vehicle_model" placeholder="Škoda Octavia">
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="driver-license-number">Broj Vozačke Dozvole</label>
+                                <input type="text" id="driver-license-number" name="license_number">
+                            </div>
+                            <div class="form-group">
+                                <label for="driver-status">Status</label>
+                                <select id="driver-status" name="status">
+                                    <option value="active">Aktivan</option>
+                                    <option value="inactive">Neaktivan</option>
+                                    <option value="on_break">Na Pauzi</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-actions" style="margin-top: 20px;">
+                            <button type="submit" class="button button-primary">Spremi</button>
+                            <button type="button" class="button" id="cancel-driver-btn">Otkaži</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * AJAX: Load all drivers
+     */
+    public function ajax_load_drivers() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Nemate ovlaštenje.');
+        }
+
+        global $wpdb;
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+
+        $drivers = $wpdb->get_results("SELECT * FROM $drivers_table ORDER BY name ASC");
+
+        // Generate HTML for drivers table
+        $drivers_html = '';
+        if ($drivers) {
+            foreach ($drivers as $driver) {
+                $status_class = '';
+                $status_label = '';
+                switch ($driver->status) {
+                    case 'active':
+                        $status_class = 'status-assigned';
+                        $status_label = 'Aktivan';
+                        break;
+                    case 'inactive':
+                        $status_class = 'status-cancelled';
+                        $status_label = 'Neaktivan';
+                        break;
+                    case 'on_break':
+                        $status_class = 'status-unassigned';
+                        $status_label = 'Na Pauzi';
+                        break;
+                }
+
+                $drivers_html .= '<tr>';
+                $drivers_html .= '<td data-label="ID">' . esc_html($driver->id) . '</td>';
+                $drivers_html .= '<td data-label="Ime">' . esc_html($driver->name) . '</td>';
+                $drivers_html .= '<td data-label="Telefon">' . esc_html($driver->phone) . '</td>';
+                $drivers_html .= '<td data-label="Broj Vozila"><strong>' . esc_html($driver->vehicle_number) . '</strong></td>';
+                $drivers_html .= '<td data-label="Model">' . esc_html($driver->vehicle_model ?: '-') . '</td>';
+                $drivers_html .= '<td data-label="Status" class="status ' . esc_attr($status_class) . '">' . esc_html($status_label) . '</td>';
+                $drivers_html .= '<td data-label="Ukupno Vožnji">' . esc_html($driver->total_rides) . '</td>';
+                $drivers_html .= '<td data-label="Zarada">' . esc_html(number_format($driver->total_earnings, 2)) . ' BAM</td>';
+                $drivers_html .= '<td data-label="Rejting">⭐ ' . esc_html(number_format($driver->rating, 2)) . '</td>';
+                $drivers_html .= '<td data-label="Akcije">';
+                $drivers_html .= '<button class="button edit-driver-btn" data-driver-id="' . esc_attr($driver->id) . '">Uredi</button> ';
+                $drivers_html .= '<button class="button delete-driver-btn" data-driver-id="' . esc_attr($driver->id) . '" style="background: #dc3545; color: white; border: none;">Obriši</button>';
+                $drivers_html .= '</td>';
+                $drivers_html .= '</tr>';
+            }
+        } else {
+            $drivers_html = '<tr><td colspan="10" style="text-align:center; padding: 40px;">Nema pronađenih vozača.</td></tr>';
+        }
+
+        // Get statistics
+        $stats = $this->get_driver_statistics();
+
+        // Prepare drivers array for dropdown population
+        $drivers_array = [];
+        if ($drivers) {
+            foreach ($drivers as $driver) {
+                $drivers_array[] = [
+                    'id' => $driver->id,
+                    'name' => $driver->name,
+                    'vehicle_number' => $driver->vehicle_number,
+                    'phone' => $driver->phone,
+                    'status' => $driver->status
+                ];
+            }
+        }
+
+        wp_send_json_success([
+            'drivers_html' => $drivers_html,
+            'stats' => $stats,
+            'drivers' => $drivers_array
+        ]);
+    }
+
+    /**
+     * AJAX: Get single driver for editing
+     */
+    public function ajax_get_driver() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Nemate ovlaštenje.');
+        }
+
+        $driver_id = intval($_POST['driver_id']);
+
+        global $wpdb;
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+
+        $driver = $wpdb->get_row($wpdb->prepare("SELECT * FROM $drivers_table WHERE id = %d", $driver_id));
+
+        if ($driver) {
+            wp_send_json_success($driver);
+        } else {
+            wp_send_json_error('Vozač nije pronađen.');
+        }
+    }
+
+    /**
+     * AJAX: Save driver (create or update)
+     */
+    public function ajax_save_driver() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Nemate ovlaštenje.');
+        }
+
+        $driver_id = intval($_POST['driver_id']);
+        $name = sanitize_text_field($_POST['name']);
+        $phone = sanitize_text_field($_POST['phone']);
+        $vehicle_number = sanitize_text_field($_POST['vehicle_number']);
+        $vehicle_model = sanitize_text_field($_POST['vehicle_model']);
+        $license_number = sanitize_text_field($_POST['license_number']);
+        $status = sanitize_text_field($_POST['status']);
+
+        if (empty($name) || empty($phone) || empty($vehicle_number)) {
+            wp_send_json_error('Ime, telefon i broj vozila su obavezni.');
+        }
+
+        global $wpdb;
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+
+        $data = array(
+            'name' => $name,
+            'phone' => $phone,
+            'vehicle_number' => $vehicle_number,
+            'vehicle_model' => $vehicle_model,
+            'license_number' => $license_number,
+            'status' => $status,
+            'updated_at' => current_time('mysql')
+        );
+
+        if ($driver_id > 0) {
+            // Update existing driver
+            $result = $wpdb->update(
+                $drivers_table,
+                $data,
+                array('id' => $driver_id),
+                array('%s', '%s', '%s', '%s', '%s', '%s', '%s'),
+                array('%d')
+            );
+
+            if ($result !== false) {
+                wp_send_json_success('Vozač uspješno ažuriran.');
+            } else {
+                wp_send_json_error('Greška pri ažuriranju vozača: ' . $wpdb->last_error);
+            }
+        } else {
+            // Create new driver
+            $result = $wpdb->insert(
+                $drivers_table,
+                $data,
+                array('%s', '%s', '%s', '%s', '%s', '%s', '%s')
+            );
+
+            if ($result) {
+                wp_send_json_success('Vozač uspješno dodan.');
+            } else {
+                wp_send_json_error('Greška pri dodavanju vozača: ' . $wpdb->last_error);
+            }
+        }
+    }
+
+    /**
+     * AJAX: Delete driver
+     */
+    public function ajax_delete_driver() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Nemate ovlaštenje.');
+        }
+
+        $driver_id = intval($_POST['driver_id']);
+
+        global $wpdb;
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+
+        $deleted = $wpdb->delete($drivers_table, array('id' => $driver_id), array('%d'));
+
+        if ($deleted) {
+            wp_send_json_success('Vozač uspješno obrisan.');
+        } else {
+            wp_send_json_error('Greška pri brisanju vozača.');
+        }
+    }
+
+    /**
+     * AJAX: Get active drivers for dropdown
+     */
+    public function ajax_get_active_drivers() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Nemate ovlaštenje.');
+        }
+
+        global $wpdb;
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+
+        $drivers = $wpdb->get_results("SELECT id, name, vehicle_number FROM $drivers_table WHERE status = 'active' ORDER BY name ASC");
+
+        wp_send_json_success($drivers);
+    }
+
+    /**
+     * AJAX handler: Export driver earnings report
+     */
+    public function ajax_export_driver_earnings() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_die('Nemate ovlaštenje.');
+        }
+
+        $driver_id = intval($_POST['driver_id']);
+        $date_range = sanitize_text_field($_POST['date_range']);
+        $start_date = sanitize_text_field($_POST['start_date'] ?? '');
+        $end_date = sanitize_text_field($_POST['end_date'] ?? '');
+
+        global $wpdb;
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+        $rides_table = $wpdb->prefix . 'cityride_rides';
+
+        // Get driver info
+        $driver = $wpdb->get_row($wpdb->prepare("SELECT * FROM $drivers_table WHERE id = %d", $driver_id));
+
+        if (!$driver) {
+            wp_die('Vozač nije pronađen.');
+        }
+
+        // Calculate date range
+        $tz = new DateTimeZone('Europe/Sarajevo');
+        $now = new DateTime('now', $tz);
+
+        switch ($date_range) {
+            case 'this_month':
+                $start_date = $now->format('Y-m-01');
+                $end_date = $now->format('Y-m-t');
+                $period_label = $now->format('F Y');
+                break;
+            case 'last_month':
+                $last_month = (clone $now)->modify('-1 month');
+                $start_date = $last_month->format('Y-m-01');
+                $end_date = $last_month->format('Y-m-t');
+                $period_label = $last_month->format('F Y');
+                break;
+            case 'this_year':
+                $start_date = $now->format('Y-01-01');
+                $end_date = $now->format('Y-12-31');
+                $period_label = $now->format('Y');
+                break;
+            case 'custom':
+                if (empty($start_date) || empty($end_date)) {
+                    wp_die('Molimo unesite početni i krajnji datum.');
+                }
+                $period_label = date('d.m.Y', strtotime($start_date)) . ' - ' . date('d.m.Y', strtotime($end_date));
+                break;
+            default:
+                wp_die('Nepoznat period.');
+        }
+
+        // Fetch rides for the driver in the date range
+        $rides = $wpdb->get_results($wpdb->prepare("
+            SELECT id, address_from, address_to, distance_km, total_price, created_at, status
+            FROM $rides_table
+            WHERE cab_driver_id = %s
+            AND status = 'completed'
+            AND DATE(created_at) BETWEEN %s AND %s
+            ORDER BY created_at DESC
+        ", $driver->vehicle_number, $start_date, $end_date));
+
+        // Calculate totals
+        $total_rides = count($rides);
+        $total_earnings = array_sum(array_column($rides, 'total_price'));
+        $avg_per_ride = $total_rides > 0 ? $total_earnings / $total_rides : 0;
+
+        // Generate Excel file
+        header('Content-Type: application/vnd.ms-excel; charset=utf-8');
+        header('Content-Disposition: attachment; filename="izvjestaj-zarade-' . sanitize_file_name($driver->name) . '-' . date('Y-m-d') . '.xls"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+
+        echo "\xEF\xBB\xBF"; // UTF-8 BOM
+        echo '<html xmlns:x="urn:schemas-microsoft-com:office:excel">';
+        echo '<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>';
+        echo '<body>';
+        echo '<table border="1">';
+
+        // Header
+        echo '<tr><th colspan="7" style="background: #0073aa; color: white; font-size: 16px; padding: 10px;">Izvještaj Zarade Vozača</th></tr>';
+        echo '<tr><td colspan="7">&nbsp;</td></tr>';
+
+        // Driver info
+        echo '<tr><td><strong>Vozač:</strong></td><td colspan="6">' . esc_html($driver->name) . '</td></tr>';
+        echo '<tr><td><strong>Vozilo:</strong></td><td colspan="6">' . esc_html($driver->vehicle_number) . ' - ' . esc_html($driver->vehicle_model) . '</td></tr>';
+        echo '<tr><td><strong>Period:</strong></td><td colspan="6">' . esc_html($period_label) . '</td></tr>';
+        echo '<tr><td colspan="7">&nbsp;</td></tr>';
+
+        // Summary
+        echo '<tr style="background: #f0f0f0;">';
+        echo '<td><strong>Ukupno Vožnji:</strong></td><td>' . $total_rides . '</td>';
+        echo '<td><strong>Ukupna Zarada:</strong></td><td>' . number_format($total_earnings, 2) . ' BAM</td>';
+        echo '<td><strong>Prosječna Zarada po Vožnji:</strong></td><td colspan="2">' . number_format($avg_per_ride, 2) . ' BAM</td>';
+        echo '</tr>';
+        echo '<tr><td colspan="7">&nbsp;</td></tr>';
+
+        // Rides table header
+        echo '<tr style="background: #0073aa; color: white; font-weight: bold;">';
+        echo '<th>ID</th>';
+        echo '<th>Datum</th>';
+        echo '<th>Vrijeme</th>';
+        echo '<th>Od</th>';
+        echo '<th>Do</th>';
+        echo '<th>Udaljenost (km)</th>';
+        echo '<th>Zarada (BAM)</th>';
+        echo '</tr>';
+
+        // Rides data
+        if ($total_rides > 0) {
+            foreach ($rides as $ride) {
+                $datetime = new DateTime($ride->created_at, $tz);
+                echo '<tr>';
+                echo '<td>#' . $ride->id . '</td>';
+                echo '<td>' . $datetime->format('d.m.Y') . '</td>';
+                echo '<td>' . $datetime->format('H:i') . '</td>';
+                echo '<td>' . esc_html($ride->address_from) . '</td>';
+                echo '<td>' . esc_html($ride->address_to) . '</td>';
+                echo '<td>' . number_format($ride->distance_km, 2) . '</td>';
+                echo '<td>' . number_format($ride->total_price, 2) . '</td>';
+                echo '</tr>';
+            }
+        } else {
+            echo '<tr><td colspan="7" style="text-align: center; color: #999;">Nema vožnji u ovom periodu.</td></tr>';
+        }
+
+        echo '</table>';
+        echo '</body>';
+        echo '</html>';
+
+        exit;
+    }
+
+    /**
+     * Get driver statistics
+     */
+    private function get_driver_statistics() {
+        global $wpdb;
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+
+        $total_drivers = $wpdb->get_var("SELECT COUNT(*) FROM $drivers_table");
+        $active_drivers = $wpdb->get_var("SELECT COUNT(*) FROM $drivers_table WHERE status = 'active'");
+        $total_earnings = $wpdb->get_var("SELECT SUM(total_earnings) FROM $drivers_table");
+
+        $top_driver = $wpdb->get_row("SELECT name, total_rides FROM $drivers_table ORDER BY total_rides DESC LIMIT 1");
+
+        return array(
+            'total_drivers' => intval($total_drivers),
+            'active_drivers' => intval($active_drivers),
+            'total_earnings' => floatval($total_earnings ?: 0),
+            'top_driver' => $top_driver ? $top_driver->name . ' (' . $top_driver->total_rides . ')' : '-'
+        );
+    }
+
+    /**
+     * Update driver earnings and ride count when ride is completed
+     *
+     * @param string $vehicle_number Driver's vehicle number
+     * @param float $ride_earnings Earnings from the completed ride
+     */
+    private function update_driver_earnings($vehicle_number, $ride_earnings) {
+        global $wpdb;
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+
+        $wpdb->query($wpdb->prepare(
+            "UPDATE $drivers_table
+            SET total_rides = total_rides + 1,
+                total_earnings = total_earnings + %f,
+                updated_at = %s
+            WHERE vehicle_number = %s",
+            $ride_earnings,
+            current_time('mysql'),
+            $vehicle_number
+        ));
+
+        error_log("CityRide: Updated driver earnings for vehicle {$vehicle_number}: +{$ride_earnings} BAM");
+    }
+
+    /**
+     * ============================================
+     * ANALYTICS PAGE & FUNCTIONS
+     * ============================================
+     */
+
+    /**
+     * Renders the analytics dashboard page
+     */
+    public function admin_analytics_page() {
+        if (!current_user_can('manage_options')) {
+            wp_die(__('Nemate dovoljna prava za pristup ovoj stranici.'));
+        }
+
+        // Get key metrics
+        $metrics = $this->get_key_metrics();
+        $revenue_chart_data = $this->get_revenue_chart_data();
+        $driver_revenue_data = $this->get_driver_revenue_data();
+        $peak_hours_data = $this->get_peak_hours_data();
+        $status_distribution = $this->get_status_distribution();
+
+        ?>
+        <div class="wrap cityride-admin-page cityride-analytics-page">
+            <h1 class="wp-heading-inline">Analitika i Izvještaji</h1>
+            <hr class="wp-header-end">
+
+            <!-- Key Metrics Cards -->
+            <div class="analytics-metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-icon">📈</div>
+                    <h3>Prihod Danas</h3>
+                    <div class="metric-value"><?php echo number_format($metrics['today_revenue'], 2); ?> BAM</div>
+                    <div class="metric-change <?php echo $metrics['today_vs_yesterday_change'] >= 0 ? 'positive' : 'negative'; ?>">
+                        <?php echo $metrics['today_vs_yesterday_change'] >= 0 ? '+' : ''; ?><?php echo number_format($metrics['today_vs_yesterday_change'], 1); ?>% u odnosu na juče
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-icon">💰</div>
+                    <h3>Ovaj Mjesec</h3>
+                    <div class="metric-value"><?php echo number_format($metrics['month_revenue'], 2); ?> BAM</div>
+                    <div class="metric-subtext"><?php echo $metrics['month_rides']; ?> vožnji</div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-icon">🚕</div>
+                    <h3>Prosječna Vožnja</h3>
+                    <div class="metric-value"><?php echo number_format($metrics['avg_ride_value'], 2); ?> BAM</div>
+                    <div class="metric-subtext">Zadnjih 30 dana</div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-icon">❌</div>
+                    <h3>Stopa Otkazivanja</h3>
+                    <div class="metric-value"><?php echo number_format($metrics['cancellation_rate'], 1); ?>%</div>
+                    <div class="metric-subtext">Zadnjih 30 dana</div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="analytics-charts-section">
+                <!-- Revenue Chart -->
+                <div class="chart-container">
+                    <h2>Prihod Zadnjih 30 Dana</h2>
+                    <canvas id="revenue-chart"></canvas>
+                </div>
+
+                <!-- Driver Revenue Chart -->
+                <div class="chart-container">
+                    <h2>Prihod po Vozačima (Ovaj Mjesec)</h2>
+                    <canvas id="driver-revenue-chart"></canvas>
+                </div>
+
+                <!-- Peak Hours Chart -->
+                <div class="chart-container">
+                    <h2>Rezervacije po Satima (Zadnjih 30 Dana)</h2>
+                    <canvas id="peak-hours-chart"></canvas>
+                </div>
+
+                <!-- Status Pie Chart -->
+                <div class="chart-container">
+                    <h2>Distribucija Statusa (Zadnjih 30 Dana)</h2>
+                    <canvas id="status-pie-chart"></canvas>
+                </div>
+            </div>
+
+            <!-- Detailed Reports Section -->
+            <div class="analytics-reports-section">
+                <h2>Detaljni Izvještaji</h2>
+
+                <form id="analytics-filters" class="cityride-filters-and-controls">
+                    <div class="filter-group">
+                        <label for="analytics-start-date">Od datuma:</label>
+                        <input type="date" id="analytics-start-date" name="start_date" value="<?php echo date('Y-m-01'); ?>" />
+                    </div>
+
+                    <div class="filter-group">
+                        <label for="analytics-end-date">Do datuma:</label>
+                        <input type="date" id="analytics-end-date" name="end_date" value="<?php echo date('Y-m-d'); ?>" />
+                    </div>
+
+                    <div class="filter-group">
+                        <label for="analytics-group-by">Grupisanje:</label>
+                        <select id="analytics-group-by" name="group_by">
+                            <option value="day">Po danu</option>
+                            <option value="week">Po sedmici</option>
+                            <option value="month">Po mjesecu</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-actions">
+                        <button type="submit" class="button button-primary">Generiši Izvještaj</button>
+                        <button type="button" id="export-analytics-excel" class="button">
+                            <span class="dashicons dashicons-download"></span> Izvezi u Excel
+                        </button>
+                    </div>
+                </form>
+
+                <table class="wp-list-table widefat fixed striped" id="analytics-report-table">
+                    <thead>
+                        <tr>
+                            <th>Period</th>
+                            <th>Ukupno Vožnji</th>
+                            <th>Završeno</th>
+                            <th>Otkazano</th>
+                            <th>Prihod (BAM)</th>
+                            <th>Prosječna Vožnja</th>
+                            <th>Stopa Otkazivanja</th>
+                        </tr>
+                    </thead>
+                    <tbody id="report-table-body">
+                        <tr>
+                            <td colspan="7" style="text-align: center; padding: 40px;">
+                                Kliknite "Generiši Izvještaj" da vidite detalje...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <script>
+        // Pass PHP data to JavaScript
+        const analyticsData = {
+            revenueChart: <?php echo json_encode($revenue_chart_data); ?>,
+            driverRevenue: <?php echo json_encode($driver_revenue_data); ?>,
+            peakHours: <?php echo json_encode($peak_hours_data); ?>,
+            statusDistribution: <?php echo json_encode($status_distribution); ?>
+        };
+        </script>
+        <?php
+    }
+
+    /**
+     * Get key metrics for analytics dashboard
+     */
+    private function get_key_metrics() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'cityride_rides';
+
+        // Today's revenue
+        $today_revenue = $wpdb->get_var("
+            SELECT COALESCE(SUM(total_price), 0)
+            FROM $table
+            WHERE DATE(created_at) = CURDATE()
+            AND status = 'completed'
+        ");
+
+        // Yesterday's revenue
+        $yesterday_revenue = $wpdb->get_var("
+            SELECT COALESCE(SUM(total_price), 0)
+            FROM $table
+            WHERE DATE(created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+            AND status = 'completed'
+        ");
+
+        // Calculate percentage change
+        $today_vs_yesterday_change = 0;
+        if ($yesterday_revenue > 0) {
+            $today_vs_yesterday_change = (($today_revenue - $yesterday_revenue) / $yesterday_revenue) * 100;
+        }
+
+        // This month's revenue and rides
+        $month_data = $wpdb->get_row("
+            SELECT
+                COALESCE(SUM(total_price), 0) as revenue,
+                COUNT(*) as rides
+            FROM $table
+            WHERE YEAR(created_at) = YEAR(CURDATE())
+            AND MONTH(created_at) = MONTH(CURDATE())
+            AND status = 'completed'
+        ");
+
+        // Average ride value (last 30 days)
+        $avg_ride_value = $wpdb->get_var("
+            SELECT COALESCE(AVG(total_price), 0)
+            FROM $table
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            AND status = 'completed'
+        ");
+
+        // Cancellation rate (last 30 days)
+        $cancellation_data = $wpdb->get_row("
+            SELECT
+                COUNT(*) as total_rides,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_rides
+            FROM $table
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        ");
+
+        $cancellation_rate = 0;
+        if ($cancellation_data->total_rides > 0) {
+            $cancellation_rate = ($cancellation_data->cancelled_rides / $cancellation_data->total_rides) * 100;
+        }
+
+        return array(
+            'today_revenue' => floatval($today_revenue),
+            'today_vs_yesterday_change' => floatval($today_vs_yesterday_change),
+            'month_revenue' => floatval($month_data->revenue),
+            'month_rides' => intval($month_data->rides),
+            'avg_ride_value' => floatval($avg_ride_value),
+            'cancellation_rate' => floatval($cancellation_rate)
+        );
+    }
+
+    /**
+     * Get revenue chart data (last 30 days)
+     */
+    private function get_revenue_chart_data() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'cityride_rides';
+
+        $results = $wpdb->get_results("
+            SELECT
+                DATE(created_at) as date,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN total_price ELSE 0 END), 0) as revenue
+            FROM $table
+            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            GROUP BY DATE(created_at)
+            ORDER BY date ASC
+        ", ARRAY_A);
+
+        $dates = array();
+        $revenues = array();
+
+        foreach ($results as $row) {
+            $dates[] = date('d.m', strtotime($row['date']));
+            $revenues[] = floatval($row['revenue']);
+        }
+
+        return array(
+            'dates' => $dates,
+            'revenues' => $revenues
+        );
+    }
+
+    /**
+     * Get driver revenue data (this month)
+     */
+    private function get_driver_revenue_data() {
+        global $wpdb;
+        $rides_table = $wpdb->prefix . 'cityride_rides';
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+
+        $results = $wpdb->get_results("
+            SELECT
+                d.name as driver_name,
+                d.vehicle_number,
+                COUNT(r.id) as ride_count,
+                COALESCE(SUM(r.total_price), 0) as total_revenue
+            FROM $drivers_table d
+            LEFT JOIN $rides_table r ON d.vehicle_number = r.cab_driver_id
+                AND r.status = 'completed'
+                AND YEAR(r.created_at) = YEAR(CURDATE())
+                AND MONTH(r.created_at) = MONTH(CURDATE())
+            GROUP BY d.id
+            HAVING total_revenue > 0
+            ORDER BY total_revenue DESC
+            LIMIT 10
+        ", ARRAY_A);
+
+        $driver_names = array();
+        $revenues = array();
+
+        foreach ($results as $row) {
+            $driver_names[] = $row['driver_name'] . ' (' . $row['vehicle_number'] . ')';
+            $revenues[] = floatval($row['total_revenue']);
+        }
+
+        return array(
+            'driver_names' => $driver_names,
+            'revenues' => $revenues
+        );
+    }
+
+    /**
+     * Get peak hours data (last 30 days)
+     */
+    private function get_peak_hours_data() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'cityride_rides';
+
+        $results = $wpdb->get_results("
+            SELECT
+                HOUR(created_at) as hour,
+                COUNT(*) as booking_count
+            FROM $table
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            GROUP BY hour
+            ORDER BY hour ASC
+        ", ARRAY_A);
+
+        // Initialize all hours with 0
+        $hours = array();
+        $counts = array();
+        for ($i = 0; $i < 24; $i++) {
+            $hours[$i] = sprintf('%02d:00', $i);
+            $counts[$i] = 0;
+        }
+
+        // Fill in actual data
+        foreach ($results as $row) {
+            $hour = intval($row['hour']);
+            $counts[$hour] = intval($row['booking_count']);
+        }
+
+        return array(
+            'hours' => array_values($hours),
+            'counts' => array_values($counts)
+        );
+    }
+
+    /**
+     * Get status distribution (last 30 days)
+     */
+    private function get_status_distribution() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'cityride_rides';
+
+        $results = $wpdb->get_results("
+            SELECT
+                status,
+                COUNT(*) as count
+            FROM $table
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            GROUP BY status
+        ", ARRAY_A);
+
+        $status_labels = array();
+        $status_counts = array();
+
+        // Map status names to Serbian
+        $status_map = array(
+            'payed_unassigned' => 'Neraspoređeno',
+            'payed_assigned' => 'Raspoređeno',
+            'completed' => 'Završeno',
+            'cancelled' => 'Otkazano',
+            'no_show' => 'Nije se pojavio'
+        );
+
+        foreach ($results as $row) {
+            $status = $row['status'];
+            $status_labels[] = isset($status_map[$status]) ? $status_map[$status] : $status;
+            $status_counts[] = intval($row['count']);
+        }
+
+        return array(
+            'labels' => $status_labels,
+            'counts' => $status_counts
+        );
+    }
+
+    /**
+     * Admin page for discount code management
+     */
+    public function admin_discounts_page() {
+        if (!current_user_can('manage_options')) {
+            wp_die(__('Nemate dovoljna prava za pristup ovoj stranici.'));
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_discount_codes';
+
+        // Get statistics
+        $total_codes = $wpdb->get_var("SELECT COUNT(*) FROM $table_name");
+        $active_codes = $wpdb->get_var("SELECT COUNT(*) FROM $table_name WHERE is_active = 1");
+        $total_usage = $wpdb->get_var("SELECT SUM(usage_count) FROM $table_name");
+        ?>
+        <div class="wrap cityride-admin-page">
+            <h1 class="wp-heading-inline">Kodovi Popusta</h1>
+            <button type="button" id="add-discount-code-btn" class="page-title-action">Dodaj novi kod</button>
+            <hr class="wp-header-end">
+
+            <!-- Statistics Widgets -->
+            <div class="cityride-dashboard-widgets">
+                <div class="cityride-dashboard-widget stat-box">
+                    <div class="stat-icon">🎁</div>
+                    <div class="stat-content">
+                        <h3>Ukupno Kodova</h3>
+                        <p class="stat-number"><?php echo $total_codes ?: 0; ?></p>
+                    </div>
+                </div>
+                <div class="cityride-dashboard-widget stat-box">
+                    <div class="stat-icon">✅</div>
+                    <div class="stat-content">
+                        <h3>Aktivni Kodovi</h3>
+                        <p class="stat-number"><?php echo $active_codes ?: 0; ?></p>
+                    </div>
+                </div>
+                <div class="cityride-dashboard-widget stat-box">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-content">
+                        <h3>Ukupna Upotreba</h3>
+                        <p class="stat-number"><?php echo $total_usage ?: 0; ?></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Discount Codes Table -->
+            <div class="cityride-table-container">
+                <table class="wp-list-table widefat fixed striped">
+                    <thead>
+                        <tr>
+                            <th>Kod</th>
+                            <th>Tip</th>
+                            <th>Vrijednost</th>
+                            <th>Min. Iznos</th>
+                            <th>Limit</th>
+                            <th>Korišteno</th>
+                            <th>Važi Od</th>
+                            <th>Važi Do</th>
+                            <th>Status</th>
+                            <th>Akcije</th>
+                        </tr>
+                    </thead>
+                    <tbody id="discount-codes-table-body">
+                        <tr>
+                            <td colspan="10" style="text-align: center; padding: 40px;">
+                                <div class="spinner is-active" style="float: none;"></div>
+                                Učitavanje kodova...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Add/Edit Discount Code Modal -->
+            <div id="discount-code-modal" class="cityride-modal" style="display: none;">
+                <div class="cityride-modal-content">
+                    <span class="close">&times;</span>
+                    <h2 id="discount-code-modal-title">Dodaj Kod Popusta</h2>
+                    <div id="discount-code-modal-message" style="display: none;"></div>
+                    <form id="discount-code-form">
+                        <input type="hidden" id="discount-code-id" name="id">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="discount-code-code">Kod:</label>
+                                <input type="text" id="discount-code-code" name="code" required style="text-transform: uppercase;">
+                                <p class="description">Unesite jedinstveni kod (npr. SUMMER2026)</p>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="discount-type">Tip Popusta:</label>
+                                <select id="discount-type" name="discount_type" required>
+                                    <option value="percent">Procenat (%)</option>
+                                    <option value="fixed">Fiksni iznos (BAM)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="discount-value">Vrijednost:</label>
+                                <input type="number" step="0.01" id="discount-value" name="discount_value" required min="0">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="min-order-amount">Minimalan Iznos Narudžbe (BAM):</label>
+                                <input type="number" step="0.01" id="min-order-amount" name="min_order_amount" value="0" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="max-discount-amount">Maksimalan Popust (BAM):</label>
+                                <input type="number" step="0.01" id="max-discount-amount" name="max_discount_amount" placeholder="Neograničeno">
+                                <p class="description">Samo za procentualne popuste</p>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="usage-limit">Limit Upotrebe:</label>
+                                <input type="number" id="usage-limit" name="usage_limit" placeholder="Neograničeno" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>Status:</label>
+                                <label style="display: inline-flex; align-items: center;">
+                                    <input type="checkbox" id="is-active" name="is_active" value="1" checked>
+                                    <span style="margin-left: 5px;">Aktivan</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="valid-from">Važi Od:</label>
+                                <input type="datetime-local" id="valid-from" name="valid_from">
+                            </div>
+                            <div class="form-group">
+                                <label for="valid-until">Važi Do:</label>
+                                <input type="datetime-local" id="valid-until" name="valid_until">
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="button button-primary">Spremi</button>
+                            <button type="button" class="button modal-cancel">Odustani</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * AJAX handler: Load all discount codes
+     */
+    public function ajax_load_discount_codes() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_discount_codes';
+
+        $codes = $wpdb->get_results("SELECT * FROM $table_name ORDER BY created_at DESC", ARRAY_A);
+
+        wp_send_json_success($codes);
+    }
+
+    /**
+     * AJAX handler: Get single discount code
+     */
+    public function ajax_get_discount_code() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        $id = intval($_POST['id']);
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_discount_codes';
+
+        $code = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $id), ARRAY_A);
+
+        if ($code) {
+            wp_send_json_success($code);
+        } else {
+            wp_send_json_error('Kod nije pronađen.');
+        }
+    }
+
+    /**
+     * AJAX handler: Save (create/update) discount code
+     */
+    public function ajax_save_discount_code() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        $id = isset($_POST['id']) && !empty($_POST['id']) ? intval($_POST['id']) : null;
+        $code = strtoupper(trim(sanitize_text_field($_POST['code'])));
+        $discount_type = sanitize_text_field($_POST['discount_type']);
+        $discount_value = floatval($_POST['discount_value']);
+        $min_order_amount = floatval($_POST['min_order_amount']);
+        $max_discount_amount = !empty($_POST['max_discount_amount']) ? floatval($_POST['max_discount_amount']) : null;
+        $usage_limit = !empty($_POST['usage_limit']) ? intval($_POST['usage_limit']) : null;
+        $is_active = isset($_POST['is_active']) ? 1 : 0;
+        $valid_from = !empty($_POST['valid_from']) ? sanitize_text_field($_POST['valid_from']) : null;
+        $valid_until = !empty($_POST['valid_until']) ? sanitize_text_field($_POST['valid_until']) : null;
+
+        if (empty($code) || empty($discount_type) || $discount_value <= 0) {
+            wp_send_json_error('Nedostaju obavezni podaci.');
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_discount_codes';
+
+        // Check for duplicate code
+        $existing = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM $table_name WHERE code = %s AND id != %d",
+            $code,
+            $id ?: 0
+        ));
+
+        if ($existing) {
+            wp_send_json_error('Kod već postoji. Molimo koristite drugi kod.');
+        }
+
+        $data = array(
+            'code' => $code,
+            'discount_type' => $discount_type,
+            'discount_value' => $discount_value,
+            'min_order_amount' => $min_order_amount,
+            'max_discount_amount' => $max_discount_amount,
+            'usage_limit' => $usage_limit,
+            'is_active' => $is_active,
+            'valid_from' => $valid_from,
+            'valid_until' => $valid_until,
+            'updated_at' => current_time('mysql')
+        );
+
+        $format = array('%s', '%s', '%f', '%f', '%f', '%d', '%d', '%s', '%s', '%s');
+
+        if ($id) {
+            // Update existing code
+            $result = $wpdb->update($table_name, $data, array('id' => $id), $format, array('%d'));
+            $message = 'Kod popusta uspješno ažuriran!';
+        } else {
+            // Create new code
+            $data['usage_count'] = 0;
+            $data['created_at'] = current_time('mysql');
+            $format[] = '%d';
+            $format[] = '%s';
+            $result = $wpdb->insert($table_name, $data, $format);
+            $message = 'Kod popusta uspješno kreiran!';
+        }
+
+        if ($result !== false) {
+            wp_send_json_success(array('message' => $message));
+        } else {
+            wp_send_json_error('Greška pri spremanju koda.');
+        }
+    }
+
+    /**
+     * AJAX handler: Delete discount code
+     */
+    public function ajax_delete_discount_code() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        $id = intval($_POST['id']);
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_discount_codes';
+
+        $result = $wpdb->delete($table_name, array('id' => $id), array('%d'));
+
+        if ($result !== false) {
+            wp_send_json_success(array('message' => 'Kod popusta uspješno obrisan!'));
+        } else {
+            wp_send_json_error('Greška pri brisanju koda.');
+        }
+    }
+
+    /**
+     * AJAX handler: Toggle discount code active status
+     */
+    public function ajax_toggle_discount_code() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        $id = intval($_POST['id']);
+        $is_active = intval($_POST['is_active']);
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_discount_codes';
+
+        $result = $wpdb->update(
+            $table_name,
+            array('is_active' => $is_active, 'updated_at' => current_time('mysql')),
+            array('id' => $id),
+            array('%d', '%s'),
+            array('%d')
+        );
+
+        if ($result !== false) {
+            wp_send_json_success(array('message' => 'Status koda ažuriran!'));
+        } else {
+            wp_send_json_error('Greška pri ažuriranju statusa.');
+        }
+    }
+
+    /**
+     * AJAX handler: Get analytics data for detailed reports
+     */
+    public function ajax_get_analytics_data() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        $start_date = sanitize_text_field($_POST['start_date']);
+        $end_date = sanitize_text_field($_POST['end_date']);
+        $group_by = sanitize_text_field($_POST['group_by']);
+
+        global $wpdb;
+        $table = $wpdb->prefix . 'cityride_rides';
+
+        // Determine date format
+        $date_format_map = array(
+            'day' => '%Y-%m-%d',
+            'week' => '%Y-%u',
+            'month' => '%Y-%m'
+        );
+        $date_format = isset($date_format_map[$group_by]) ? $date_format_map[$group_by] : '%Y-%m-%d';
+
+        $results = $wpdb->get_results($wpdb->prepare("
+            SELECT
+                DATE_FORMAT(created_at, %s) as period,
+                COUNT(*) as total_rides,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_rides,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_rides,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN total_price ELSE 0 END), 0) as total_revenue,
+                COALESCE(AVG(CASE WHEN status = 'completed' THEN total_price ELSE NULL END), 0) as avg_ride_value,
+                (SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) / COUNT(*) * 100) as cancellation_rate
+            FROM $table
+            WHERE created_at BETWEEN %s AND %s
+            GROUP BY period
+            ORDER BY period DESC
+        ", $date_format, $start_date . ' 00:00:00', $end_date . ' 23:59:59'), ARRAY_A);
+
+        wp_send_json_success($results);
+    }
+
+    /**
+     * AJAX handler: Export analytics to Excel
+     */
+    public function ajax_export_analytics_excel() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        $start_date = sanitize_text_field($_POST['start_date']);
+        $end_date = sanitize_text_field($_POST['end_date']);
+        $group_by = sanitize_text_field($_POST['group_by']);
+
+        global $wpdb;
+        $table = $wpdb->prefix . 'cityride_rides';
+
+        // Determine date format
+        $date_format_map = array(
+            'day' => '%Y-%m-%d',
+            'week' => '%Y-%u',
+            'month' => '%Y-%m'
+        );
+        $date_format = isset($date_format_map[$group_by]) ? $date_format_map[$group_by] : '%Y-%m-%d';
+
+        $results = $wpdb->get_results($wpdb->prepare("
+            SELECT
+                DATE_FORMAT(created_at, %s) as period,
+                COUNT(*) as total_rides,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_rides,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_rides,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN total_price ELSE 0 END), 0) as total_revenue,
+                COALESCE(AVG(CASE WHEN status = 'completed' THEN total_price ELSE NULL END), 0) as avg_ride_value,
+                (SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) / COUNT(*) * 100) as cancellation_rate
+            FROM $table
+            WHERE created_at BETWEEN %s AND %s
+            GROUP BY period
+            ORDER BY period DESC
+        ", $date_format, $start_date . ' 00:00:00', $end_date . ' 23:59:59'), ARRAY_A);
+
+        // Set headers for Excel download
+        header('Content-Type: application/vnd.ms-excel; charset=utf-8');
+        header('Content-Disposition: attachment; filename="cityride-analytics-' . date('Y-m-d') . '.xls"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+
+        // Generate Excel HTML table
+        echo "\xEF\xBB\xBF"; // UTF-8 BOM
+        echo '<html xmlns:x="urn:schemas-microsoft-com:office:excel">';
+        echo '<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>';
+        echo '<body>';
+        echo '<table border="1">';
+        echo '<tr>';
+        echo '<th>Period</th>';
+        echo '<th>Ukupno Vožnji</th>';
+        echo '<th>Završeno</th>';
+        echo '<th>Otkazano</th>';
+        echo '<th>Prihod (BAM)</th>';
+        echo '<th>Prosječna Vožnja</th>';
+        echo '<th>Stopa Otkazivanja (%)</th>';
+        echo '</tr>';
+
+        foreach ($results as $row) {
+            echo '<tr>';
+            echo '<td>' . esc_html($row['period']) . '</td>';
+            echo '<td>' . esc_html($row['total_rides']) . '</td>';
+            echo '<td>' . esc_html($row['completed_rides']) . '</td>';
+            echo '<td>' . esc_html($row['cancelled_rides']) . '</td>';
+            echo '<td>' . number_format($row['total_revenue'], 2, ',', '.') . '</td>';
+            echo '<td>' . number_format($row['avg_ride_value'], 2, ',', '.') . '</td>';
+            echo '<td>' . number_format($row['cancellation_rate'], 1, ',', '.') . '</td>';
+            echo '</tr>';
+        }
+
+        echo '</table>';
+        echo '</body></html>';
+
+        exit;
     }
 } // <-- Ovo je zatvarajuća zagrada za klasu CityRideBooking
 

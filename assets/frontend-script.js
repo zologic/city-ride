@@ -133,10 +133,20 @@ jQuery(document).ready(function($) {
                         price_per_km: data.price_per_km
                     };
 
+                    // Update hidden fields with calculated values
+                    $('#calculated_distance_km').val(data.distance_km);
+                    $('#calculated_total_price').val(data.total_price);
+                    $('#calculated_stripe_amount').val(data.stripe_amount);
+
+                    // Display basic pricing info
                     $('#distance-display').text(data.distance_km);
                     $('#start-tariff-display').text(data.start_tariff.toFixed(2));
                     $('#price-per-km-display').text(data.price_per_km.toFixed(2));
                     $('#total-price').text(data.total_price.toFixed(2));
+
+                    // Show discount code section
+                    $('#discount-code-section').fadeIn();
+
                     $('#price-calculation-section').fadeIn();
 
                     if (data.route_geometry && data.from_coords && data.to_coords) {
@@ -272,7 +282,11 @@ jQuery(document).ready(function($) {
                 passenger_name: paymentData.passenger_name,
                 passenger_phone: paymentData.passenger_phone,
                 passenger_email: paymentData.passenger_email,
-                passenger_onesignal_id: finalOneSignalPlayerId // Proslijeđuje Player ID
+                passenger_onesignal_id: finalOneSignalPlayerId, // Proslijeđuje Player ID
+                discount_code: discountData ? discountData.code : '',
+                discount_amount: discountData ? discountData.discount_amount : 0,
+                original_price: discountData ? discountData.original_price : currentBookingData.total_price,
+                final_price: discountData ? discountData.final_price : currentBookingData.total_price
             },
             success: function(response) {
                 if (response.success) {
@@ -377,4 +391,137 @@ jQuery(document).ready(function($) {
             displayError.textContent = event.error ? event.error.message : '';
         });
     }
+
+    /**
+     * Discount Code Handling
+     */
+    let discountApplied = false;
+    let discountData = null;
+
+    const discountSection = document.getElementById('discount-code-section');
+    const discountInput = document.getElementById('discount-code-input');
+    const applyDiscountBtn = document.getElementById('apply-discount-btn');
+    const removeDiscountBtn = document.getElementById('remove-discount-btn');
+    const discountMessage = document.getElementById('discount-message');
+    const discountDetails = document.getElementById('discount-details');
+
+    // Apply discount code
+    if (applyDiscountBtn) {
+        applyDiscountBtn.addEventListener('click', function() {
+            const code = discountInput.value.trim().toUpperCase();
+
+            if (!code) {
+                showDiscountMessage('Molimo unesite kod popusta.', 'error');
+                return;
+            }
+
+            // Get the current price (after surcharges)
+            const currentPrice = parseFloat(document.getElementById('calculated_total_price').value);
+
+            // Show loading
+            applyDiscountBtn.disabled = true;
+            applyDiscountBtn.textContent = 'Provjeravam...';
+
+            jQuery.ajax({
+                url: cityride_frontend_ajax.ajax_url,
+                type: 'POST',
+                data: {
+                    action: 'cityride_validate_discount_code',
+                    nonce: cityride_frontend_ajax.nonce,
+                    code: code,
+                    order_amount: currentPrice
+                },
+                success: function(response) {
+                    applyDiscountBtn.disabled = false;
+                    applyDiscountBtn.textContent = 'Primijeni';
+
+                    if (response.success) {
+                        discountApplied = true;
+                        discountData = response.data;
+
+                        // Update hidden fields
+                        document.getElementById('calculated_stripe_amount').value = discountData.stripe_amount;
+                        document.getElementById('discount_code_applied').value = discountData.code;
+                        document.getElementById('discount_amount_applied').value = discountData.discount_amount;
+
+                        // Update UI
+                        document.getElementById('discount-original-price').textContent = discountData.original_price.toFixed(2) + ' BAM';
+                        document.getElementById('discount-code-used').textContent = discountData.code;
+                        document.getElementById('discount-amount').textContent = '-' + discountData.discount_amount.toFixed(2) + ' BAM';
+                        document.getElementById('discount-final-price').textContent = discountData.final_price.toFixed(2) + ' BAM';
+
+                        // Update main price display
+                        document.getElementById('total-price').textContent = discountData.final_price.toFixed(2);
+
+                        // Show discount details, hide input
+                        discountInput.style.display = 'none';
+                        applyDiscountBtn.style.display = 'none';
+                        discountDetails.style.display = 'block';
+
+                        showDiscountMessage(discountData.message, 'success');
+                    } else {
+                        showDiscountMessage(response.data, 'error');
+                    }
+                },
+                error: function() {
+                    applyDiscountBtn.disabled = false;
+                    applyDiscountBtn.textContent = 'Primijeni';
+                    showDiscountMessage('Greška pri validaciji koda. Pokušajte ponovo.', 'error');
+                }
+            });
+        });
+    }
+
+    // Remove discount code
+    if (removeDiscountBtn) {
+        removeDiscountBtn.addEventListener('click', function() {
+            discountApplied = false;
+            discountData = null;
+
+            // Reset hidden fields
+            const originalPrice = parseFloat(discountDetails.querySelector('#discount-original-price').textContent);
+            const originalStripeAmount = Math.round(originalPrice * 100);
+
+            document.getElementById('calculated_stripe_amount').value = originalStripeAmount;
+            document.getElementById('discount_code_applied').value = '';
+            document.getElementById('discount_amount_applied').value = '0';
+
+            // Reset main price display
+            document.getElementById('total-price').textContent = originalPrice.toFixed(2);
+
+            // Show input, hide details
+            discountInput.style.display = 'block';
+            applyDiscountBtn.style.display = 'inline-block';
+            discountDetails.style.display = 'none';
+            discountInput.value = '';
+
+            showDiscountMessage('', '');
+        });
+    }
+
+    // Helper function to show discount messages
+    function showDiscountMessage(message, type) {
+        if (!message) {
+            discountMessage.textContent = '';
+            discountMessage.style.display = 'none';
+            return;
+        }
+
+        discountMessage.textContent = message;
+        discountMessage.style.display = 'block';
+
+        if (type === 'success') {
+            discountMessage.style.color = '#4CAF50';
+        } else if (type === 'error') {
+            discountMessage.style.color = '#f44336';
+        }
+    }
+
+    // Show discount section when price is calculated
+    document.getElementById('calculate-price-btn').addEventListener('click', function() {
+        // Reset discount when recalculating
+        if (discountApplied) {
+            removeDiscountBtn.click();
+        }
+    });
 });
