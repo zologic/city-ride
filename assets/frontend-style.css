@@ -785,24 +785,7 @@ body {
         background: #f8f9fa;
         border-radius: 8px;
     }
-    
-    .discount-input-group {
-        display: flex;
-        gap: 10px;
-        flex-wrap: nowrap;
-    }
-    
-    .discount-input-group input {
-        flex: 1;
-        min-width: 0;
-    }
-    
-    .discount-input-group button {
-        white-space: nowrap;
-        padding: 0 20px;
-        flex-shrink: 0;
-    }
-    
+
     /* Stripe card element */
     #card-element {
         padding: 15px !important;
@@ -1335,104 +1318,78 @@ input#passenger-phone {
     color: #333 !important;
 }
 
-/* Desktop: Horizontal layout (input and button side-by-side) */
+/* Discount Input Group - Consolidated Single Rule Set */
 .discount-input-group {
-    display: flex !important;
-    flex-direction: row !important;
-    gap: 8px !important;
-    width: 100% !important;
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+    width: 100%;
 }
 
-/* Input field styling */
 .discount-input-group input {
-    flex: 1 !important;
-    padding: 12px 15px !important;
-    border: 2px solid #e0e0e0 !important;
-    border-radius: 8px !important;
-    font-size: 15px !important;
-    text-transform: uppercase !important;
-    box-sizing: border-box !important;
-    background: white !important;
-    min-height: 44px !important;
+    flex: 1;
+    padding: 12px 15px;
+    border: 2px solid #e0e0e0;
+    border-radius: 6px;
+    font-size: 15px;
+    text-transform: uppercase;
+    box-sizing: border-box;
+    background: white;
+    color: #333;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-/* Placeholder styling - ensure it's visible */
 .discount-input-group input::placeholder {
-    color: #999 !important;
-    opacity: 1 !important;
-    font-size: 15px !important;
+    color: #999;
+    opacity: 1;
+    font-size: 15px;
 }
 
-.discount-input-group input::-webkit-input-placeholder {
-    color: #999 !important;
-    opacity: 1 !important;
-}
-
-.discount-input-group input::-moz-placeholder {
-    color: #999 !important;
-    opacity: 1 !important;
-}
-
-.discount-input-group input:-ms-input-placeholder {
-    color: #999 !important;
-    opacity: 1 !important;
-}
-
-/* Focus state */
 .discount-input-group input:focus {
-    outline: none !important;
-    border-color: #667eea !important;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
+    outline: none;
+    border-color: #333;
+    box-shadow: 0 0 0 2px rgba(51, 51, 51, 0.1);
 }
 
-/* Button styling - auto width on desktop */
 .discount-input-group button {
-    flex: 0 0 auto !important;
-    padding: 0 24px !important;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    font-size: 16px !important;
-    min-height: 44px !important;
-    cursor: pointer !important;
-    transition: transform 0.2s !important;
-    white-space: nowrap !important;
+    flex: 0 0 auto;
+    padding: 12px 24px;
+    background: #333;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 15px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
 }
 
 .discount-input-group button:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3) !important;
+    background: #000;
 }
 
 .discount-input-group button:active {
-    transform: translateY(0) !important;
+    transform: scale(0.98);
 }
 
-/* Mobile: Vertical layout (input above button) */
+/* Responsive: Mobile vertical layout */
 @media (max-width: 768px) {
     .discount-input-group {
-        flex-direction: column !important;
-        gap: 10px !important;
+        flex-direction: column;
+        gap: 10px;
     }
 
     .discount-input-group input {
-        width: 100% !important;
-        font-size: 16px !important;
-        min-height: 48px !important;
-    }
-
-    .discount-input-group input::placeholder {
-        font-size: 16px !important;
+        width: 100%;
+        font-size: 16px;
+        min-height: 48px;
     }
 
     .discount-input-group button {
-        width: 100% !important;
-        flex: none !important;
-        min-height: 48px !important;
-        font-size: 16px !important;
-        padding: 12px 20px !important;
+        width: 100%;
+        min-height: 48px;
+        font-size: 16px;
     }
 }
 
