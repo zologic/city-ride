@@ -330,6 +330,52 @@ hr.wp-header-end {
     color: #1565c0; /* Dark Blue */
 }
 
+.wp-list-table .status-cancelled {
+    background-color: #ffcdd2; /* Light Red */
+    color: #c62828; /* Dark Red */
+}
+
+.wp-list-table .status-no-show {
+    background-color: #f0f0f0; /* Light Gray */
+    color: #757575; /* Dark Gray */
+}
+
+/* SMS Delivery Status Badges */
+.sms-status {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.sms-status-delivered {
+    background-color: #c8e6c9; /* Light Green */
+    color: #2e7d32; /* Dark Green */
+}
+
+.sms-status-pending {
+    background-color: #fff9c4; /* Light Yellow */
+    color: #f57f17; /* Dark Yellow */
+}
+
+.sms-status-failed, .sms-status-rejected {
+    background-color: #ffcdd2; /* Light Red */
+    color: #c62828; /* Dark Red */
+}
+
+.sms-status-not_sent {
+    background-color: #f5f5f5; /* Light Gray */
+    color: #9e9e9e; /* Gray */
+}
+
+.sms-status-unknown {
+    background-color: #e0e0e0; /* Gray */
+    color: #616161; /* Dark Gray */
+}
+
 /* Table Action Buttons - PREVIOUSLY APPROVED STYLE */
 .wp-list-table td .button {
     font-size: 12px;
@@ -700,7 +746,9 @@ hr.wp-header-end {
 }
 
 
-/* Responsive Adjustments */
+/* Enhanced Responsive Adjustments for Mobile-First Admin Dashboard */
+
+/* Tablet and below (iPad, Android tablets) */
 @media screen and (max-width: 992px) {
     .cityride-admin-page,
     .cityride-admin-config {
@@ -709,8 +757,9 @@ hr.wp-header-end {
         padding: 15px;
     }
 
+    /* Stats grid: 2 columns on tablets */
     .cityride-dashboard-widgets {
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); /* Adjust for slightly smaller screens */
+        grid-template-columns: repeat(2, 1fr);
         gap: 15px;
     }
 
@@ -718,18 +767,21 @@ hr.wp-header-end {
         padding: 20px;
         min-height: 100px;
     }
+
     .cityride-dashboard-widget h3 {
-        font-size: 1rem;
+        font-size: 0.95rem;
     }
+
     .cityride-dashboard-widget .stat-number {
         font-size: 1.8rem;
     }
 
+    /* Filters: Stack vertically */
     .cityride-filters-and-controls {
         flex-direction: column;
         align-items: stretch;
         padding: 15px;
-        gap: 10px; /* Reduce gap on smaller screens */
+        gap: 10px;
     }
 
     .cityride-filters-and-controls .filter-group {
@@ -746,9 +798,15 @@ hr.wp-header-end {
 
     .cityride-filters-and-controls .button {
         width: 100%;
+        min-height: 44px; /* Touch-friendly height */
         margin-bottom: 0;
     }
 
+    .cityride-filters-and-controls .per-page-select {
+        margin-left: 0;
+    }
+
+    /* Pagination: Stack vertically */
     .tablenav.bottom {
         flex-direction: column;
         align-items: flex-start;
@@ -760,14 +818,9 @@ hr.wp-header-end {
         justify-content: center;
     }
 
-    /* Table Responsiveness for small screens */
-    .wp-list-table th,
-    .wp-list-table td {
-        white-space: nowrap; /* Prevent wrapping in cells */
-    }
-
+    /* Table: Card-style layout for mobile */
     .wp-list-table thead {
-        display: none; /* Hide headers on small screens */
+        display: none;
     }
 
     .wp-list-table, .wp-list-table tbody, .wp-list-table tr, .wp-list-table td {
@@ -779,74 +832,717 @@ hr.wp-header-end {
         margin-bottom: 15px;
         border: 1px solid #e0e0e0;
         border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         position: relative;
-        padding: 10px;
+        padding: 15px;
+        background: #fff;
     }
 
     .wp-list-table td {
         border: none;
         position: relative;
-        padding-left: 100px; /* Space for the label */
-        text-align: right; /* Align content to the right */
+        padding-left: 110px;
+        text-align: right;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
     }
 
     .wp-list-table td::before {
         content: attr(data-label);
         position: absolute;
-        left: 10px;
-        width: 80px;
+        left: 15px;
+        width: 90px;
         padding-right: 10px;
         white-space: nowrap;
         text-align: left;
-        font-weight: 600;
-        color: #666;
+        font-weight: 700;
+        color: #555;
         font-size: 13px;
     }
 
-    .wp-list-table td:last-child { /* Actions column */
-        text-align: center; /* Center actions */
-        padding-left: 10px; /* Reset padding */
+    .wp-list-table td:last-child {
+        text-align: center;
+        padding-left: 15px;
         border-top: 1px solid #eee;
         padding-top: 15px;
         margin-top: 10px;
+        justify-content: center;
     }
-     .wp-list-table td:last-child::before {
+
+    .wp-list-table td:last-child::before {
         display: none;
     }
 
-    .cityride-modal-content {
-        /* Nema ga više, ali sam ostavio responsive pravilo za slučaj da se negdje koristi */
-        width: 95%;
-        padding: 20px;
+    /* Action buttons: Full width on mobile */
+    .wp-list-table td .button {
+        width: 100%;
+        max-width: 200px;
+        margin: 5px 0;
+        min-height: 40px;
     }
 
+    /* Modal: Better mobile sizing */
+    .cityride-modal {
+        width: 95%;
+        max-width: 95%;
+        padding: 25px 20px;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+
+    .cityride-modal h2 {
+        font-size: 1.5em;
+    }
+
+    .cityride-modal .form-actions {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .cityride-modal .form-actions button {
+        width: 100%;
+        min-height: 44px;
+    }
+
+    /* Config page: Stack form fields */
     .cityride-admin-config .form-table th,
     .cityride-admin-config .form-table td {
         display: block;
         width: 100%;
         padding: 10px 0;
     }
+
     .cityride-admin-config .form-table th {
         text-align: left;
         padding-bottom: 5px;
+        width: 100%;
     }
+
     .cityride-admin-config .form-table td {
         padding-top: 5px;
     }
+
+    .cityride-admin-config .form-table input[type="text"],
+    .cityride-admin-config .form-table input[type="url"],
+    .cityride-admin-config .form-table input[type="number"],
+    .cityride-admin-config .form-table textarea {
+        max-width: 100%;
+        min-height: 44px;
+        font-size: 16px; /* Prevents iOS zoom */
+    }
 }
 
-@media screen and (max-width: 480px) {
+/* Mobile phones (768px and below) */
+@media screen and (max-width: 768px) {
+    /* Stats: 2 columns for phones */
     .cityride-dashboard-widgets {
-        grid-template-columns: 1fr; /* Single column on very small screens */
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
     }
-    .cityride-config-section {
-        padding: 20px;
+
+    .cityride-dashboard-widget {
+        padding: 15px;
+        min-height: 90px;
     }
-    .cityride-config-section h2 {
-        font-size: 1.5em;
+
+    .cityride-dashboard-widget h3 {
+        font-size: 0.85rem;
     }
+
+    .cityride-dashboard-widget .stat-number {
+        font-size: 1.6rem;
+    }
+
+    /* Table container: Enable horizontal scroll with fixed first column */
+    .cityride-table-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        position: relative;
+    }
+
+    /* Alternative: Keep card layout but make more compact */
+    .wp-list-table tr {
+        padding: 12px;
+    }
+
+    .wp-list-table td {
+        font-size: 13px;
+        padding-left: 95px;
+        min-height: 36px;
+    }
+
+    .wp-list-table td::before {
+        font-size: 12px;
+        width: 80px;
+    }
+
+    /* Export button: Floating action button on mobile */
+    #export-rides-csv {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        padding: 0;
+        z-index: 100;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    #export-rides-csv .dashicons {
+        margin-right: 0;
+    }
+
+    /* Hide button text, show only icon */
+    #export-rides-csv span:not(.dashicons) {
+        display: none;
+    }
+
+    /* Pagination: Simplified for mobile */
+    .pagination-links .paging-input {
+        flex-wrap: wrap;
+    }
+
+    .pagination-links .button {
+        min-width: 40px;
+        height: 40px;
+        padding: 0 10px;
+    }
+}
+
+/* Very small phones (480px and below) */
+@media screen and (max-width: 480px) {
+    /* Stats: Single column stack */
+    .cityride-dashboard-widgets {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .cityride-dashboard-widget {
+        padding: 15px;
+        min-height: 80px;
+    }
+
+    .cityride-dashboard-widget h3 {
+        font-size: 0.9rem;
+    }
+
+    .cityride-dashboard-widget .stat-number {
+        font-size: 1.8rem;
+    }
+
+    /* Page header: Smaller title */
+    .wrap h1.wp-heading-inline {
+        font-size: 22px;
+    }
+
+    /* Filters: More compact */
+    .cityride-filters-and-controls {
+        padding: 12px;
+    }
+
+    .cityride-filters-and-controls .filter-group label {
+        font-size: 12px;
+    }
+
+    .cityride-filters-and-controls .filter-group input,
+    .cityride-filters-and-controls .filter-group select {
+        font-size: 14px;
+        padding: 10px 12px;
+    }
+
+    /* Table cards: More compact */
+    .wp-list-table tr {
+        padding: 10px;
+    }
+
+    .wp-list-table td {
+        font-size: 12px;
+        padding-left: 85px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+    }
+
+    .wp-list-table td::before {
+        font-size: 11px;
+        width: 70px;
+        left: 10px;
+    }
+
+    /* Status badges: Smaller */
+    .wp-list-table .status {
+        font-size: 10px;
+        padding: 3px 6px;
+    }
+
+    /* Action buttons: Stack vertically in cards */
+    .wp-list-table td .button {
+        font-size: 12px;
+        padding: 8px 12px;
+        margin: 3px 0;
+    }
+
+    /* Modal: Full screen on very small devices */
+    .cityride-modal {
+        width: 100%;
+        max-width: 100%;
+        height: 100%;
+        max-height: 100%;
+        border-radius: 0;
+        top: 0;
+        left: 0;
+        transform: none;
+        padding: 20px 15px;
+    }
+
+    .cityride-modal .close {
+        font-size: 24px;
+        right: 10px;
+        top: 8px;
+    }
+
+    /* Config: Full width save button */
     .cityride-admin-config .submit .button-primary {
         width: 100%;
+        padding: 12px 20px;
+        font-size: 16px;
+    }
+
+    /* Pagination: Hide page numbers, show only prev/next */
+    .pagination-links .paging-input {
+        display: none;
+    }
+
+    .pagination-links .first-page,
+    .pagination-links .last-page {
+        display: none;
+    }
+
+    .pagination-links .prev-page,
+    .pagination-links .next-page {
+        font-size: 18px;
+        min-width: 44px;
+        height: 44px;
+    }
+}
+
+/* ============================================
+ * Driver Management Specific Styles
+ * ============================================ */
+
+/* Driver stat boxes - using different icon style */
+.cityride-dashboard-widget.stat-box {
+    position: relative;
+    overflow: hidden;
+}
+
+.cityride-dashboard-widget .stat-icon {
+    font-size: 2.5rem;
+    margin-bottom: 10px;
+    opacity: 0.9;
+}
+
+.cityride-dashboard-widget .stat-content h3 {
+    margin: 8px 0 5px 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #000;
+}
+
+.cityride-dashboard-widget .stat-content p.stat-number {
+    font-size: 1.8rem;
+    font-weight: 900;
+    color: #000;
+    margin: 0;
+}
+
+/* Status badges for drivers */
+.status-badge {
+    display: inline-block;
+    padding: 5px 12px;
+    border-radius: 15px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: capitalize;
+    white-space: nowrap;
+}
+
+.status-badge.status-active {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.status-badge.status-inactive {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.status-badge.status-on_break {
+    background-color: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+
+/* Driver action buttons */
+.edit-driver-btn,
+.delete-driver-btn {
+    margin-right: 5px;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    border-radius: 4px;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s ease;
+    font-weight: 600;
+}
+
+.edit-driver-btn {
+    background-color: #0073aa;
+    color: white;
+}
+
+.edit-driver-btn:hover {
+    background-color: #005a87;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,115,170,0.3);
+}
+
+.delete-driver-btn {
+    background-color: #dc3545;
+    color: white;
+}
+
+.delete-driver-btn:hover {
+    background-color: #c82333;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(220,53,69,0.3);
+}
+
+.delete-driver-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Driver modal specific styles */
+#driver-modal-message {
+    padding: 10px 15px;
+    margin-bottom: 15px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 14px;
+    border-left: 5px solid;
+    display: none;
+}
+
+#driver-modal-message.notice-success {
+    background-color: #e6ffe6;
+    border-color: #4CAF50;
+    color: #388E3C;
+}
+
+#driver-modal-message.notice-error {
+    background-color: #ffe6e6;
+    border-color: #f44336;
+    color: #D32F2F;
+}
+
+#driver-modal-message.notice-warning {
+    background-color: #fff3cd;
+    border-color: #ffc107;
+    color: #856404;
+}
+
+/* Responsive adjustments for driver management */
+@media (max-width: 768px) {
+    .cityride-dashboard-widget .stat-icon {
+        font-size: 2rem;
+    }
+
+    .cityride-dashboard-widget .stat-content p.stat-number {
+        font-size: 1.5rem;
+    }
+
+    .edit-driver-btn,
+    .delete-driver-btn {
+        display: block;
+        width: 100%;
+        margin: 5px 0;
+    }
+}
+
+/* ============================================
+ * Analytics Dashboard Specific Styles
+ * ============================================ */
+
+.cityride-analytics-page {
+    background: #f0f2f5;
+}
+
+/* Analytics Metrics Grid */
+.analytics-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
+    margin-bottom: 40px;
+}
+
+.metric-card {
+    background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+    border-radius: 12px;
+    padding: 25px;
+    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.metric-card:hover {
+    transform: translateY(-7px);
+    box-shadow: 0 12px 35px rgba(0,0,0,0.25);
+}
+
+.metric-card .metric-icon {
+    font-size: 2.5rem;
+    margin-bottom: 10px;
+    opacity: 0.9;
+}
+
+.metric-card h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 10px 0;
+    color: #000;
+}
+
+.metric-card .metric-value {
+    font-size: 1.8rem;
+    font-weight: 900;
+    color: #000;
+    margin: 5px 0;
+    line-height: 1.2;
+}
+
+.metric-card .metric-change {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-top: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: inline-block;
+}
+
+.metric-card .metric-change.positive {
+    background-color: rgba(76, 175, 80, 0.2);
+    color: #2e7d32;
+}
+
+.metric-card .metric-change.negative {
+    background-color: rgba(244, 67, 54, 0.2);
+    color: #c62828;
+}
+
+.metric-card .metric-subtext {
+    font-size: 0.9rem;
+    color: #333;
+    margin-top: 5px;
+    opacity: 0.8;
+}
+
+/* Charts Section */
+.analytics-charts-section {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+    gap: 30px;
+    margin-bottom: 40px;
+}
+
+.chart-container {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 25px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+    border: 1px solid #e0e0e0;
+}
+
+.chart-container h2 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #333;
+    margin: 0 0 20px 0;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #f0f0f0;
+}
+
+.chart-container canvas {
+    min-height: 300px;
+    max-height: 400px;
+}
+
+/* Reports Section */
+.analytics-reports-section {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+    border: 1px solid #e0e0e0;
+}
+
+.analytics-reports-section h2 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #333;
+    margin: 0 0 25px 0;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #f0f0f0;
+}
+
+.analytics-reports-section .cityride-filters-and-controls {
+    background: #f9f9f9;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 25px;
+}
+
+.analytics-reports-section #analytics-report-table {
+    margin-top: 20px;
+}
+
+.analytics-reports-section #analytics-report-table th {
+    background: #f5f5f5;
+    font-weight: 700;
+    color: #333;
+    padding: 12px;
+    text-align: left;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.analytics-reports-section #analytics-report-table td {
+    padding: 12px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.analytics-reports-section #analytics-report-table tr:hover {
+    background-color: #f9f9f9;
+}
+
+/* Export button specific styling */
+#export-analytics-excel {
+    background: linear-gradient(45deg, #0073aa, #005a87);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+#export-analytics-excel:hover {
+    background: linear-gradient(45deg, #005a87, #0073aa);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,115,170,0.3);
+}
+
+#export-analytics-excel .dashicons {
+    margin-right: 5px;
+    font-size: 18px;
+    vertical-align: middle;
+}
+
+/* Responsive adjustments for analytics */
+@media (max-width: 992px) {
+    .analytics-metrics-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 15px;
+    }
+
+    .analytics-charts-section {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+
+    .chart-container {
+        padding: 20px;
+    }
+
+    .chart-container canvas {
+        min-height: 250px;
+    }
+}
+
+@media (max-width: 768px) {
+    .analytics-metrics-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+    .metric-card {
+        padding: 20px;
+    }
+
+    .metric-card .metric-icon {
+        font-size: 2rem;
+    }
+
+    .metric-card .metric-value {
+        font-size: 1.5rem;
+    }
+
+    .analytics-charts-section {
+        gap: 15px;
+    }
+
+    .chart-container {
+        padding: 15px;
+    }
+
+    .chart-container h2 {
+        font-size: 1.1rem;
+    }
+
+    .chart-container canvas {
+        min-height: 200px;
+    }
+
+    .analytics-reports-section {
+        padding: 20px;
+    }
+
+    .analytics-reports-section .cityride-filters-and-controls {
+        padding: 15px;
+    }
+}
+
+@media (max-width: 480px) {
+    .analytics-metrics-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .metric-card {
+        padding: 18px;
+    }
+
+    .metric-card .metric-value {
+        font-size: 1.6rem;
+    }
+
+    .chart-container canvas {
+        min-height: 180px;
+    }
+
+    .analytics-reports-section {
+        padding: 15px;
+    }
+
+    .analytics-reports-section h2 {
+        font-size: 1.2rem;
     }
 }
