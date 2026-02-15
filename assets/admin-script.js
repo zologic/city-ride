@@ -1,4 +1,11 @@
 jQuery(document).ready(function($) {
+    // ===== SMART AUTO-UPDATE SYSTEM =====
+    let lastUpdateTimestamp = null;
+    let updateInterval = null;
+    let isUserTyping = false;
+    let typingTimeout = null;
+    window.pendingUpdates = null;
+
     // Function to display messages to the user in the admin panel
     function displayAdminMessage(message, type = 'info') {
         let messageContainer = $('#cityride-admin-message');
@@ -91,12 +98,336 @@ jQuery(document).ready(function($) {
     // Initial load of rides when the document is ready
     loadRides();
 
-    // Auto-refresh every 15 seconds
-    setInterval(function() {
-        // Get current filter values to maintain state on refresh
-        const currentPage = $('#rides-pagination .pagination-link.current').data('page') || 1;
-        loadRides(currentPage); // loadRides sada čita sve filtere unutar sebe
-    }, 15000);
+    // ===== SMART AUTO-UPDATE FUNCTIONS =====
+
+    function getCurrentFilters() {
+        return {
+            status: $('#status-filter').val() || 'all',
+            date_from: $('#date-from-filter').val() || '',
+            date_to: $('#date-to-filter').val() || '',
+            search: $('#search-filter').val() || ''
+        };
+    }
+
+    function initDashboardAutoUpdate() {
+        lastUpdateTimestamp = new Date().toISOString();
+
+        // Detect typing in input fields
+        $(document).on('keydown', 'input, textarea', function() {
+            isUserTyping = true;
+            clearTimeout(typingTimeout);
+
+            // User stopped typing after 2 seconds
+            typingTimeout = setTimeout(function() {
+                isUserTyping = false;
+                // Apply pending updates if any
+                if (window.pendingUpdates) {
+                    applyRideUpdates(window.pendingUpdates);
+                }
+            }, 2000);
+        });
+
+        // Check for updates every 5 seconds (fast for taxi dispatch)
+        updateInterval = setInterval(checkAndApplyUpdates, 5000);
+
+        // Request notification permission
+        if (window.Notification && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+    }
+
+    function checkAndApplyUpdates() {
+        $.ajax({
+            url: cityride_admin_ajax.ajax_url,
+            method: 'POST',
+            data: {
+                action: 'cityride_get_ride_updates',
+                nonce: cityride_admin_ajax.nonce,
+                since: lastUpdateTimestamp,
+                current_filters: getCurrentFilters()
+            },
+            success: function(response) {
+                if (response.success && response.data.rides.length > 0) {
+                    applyRideUpdates(response.data.rides);
+
+                    // Alert dispatcher of new unassigned rides
+                    const newUnassigned = response.data.rides.filter(function(r) {
+                        return r.status === 'payed_unassigned' && r.created_at > lastUpdateTimestamp;
+                    });
+
+                    if (newUnassigned.length > 0) {
+                        alertNewBooking(newUnassigned);
+                    }
+
+                    // Update stats if provided
+                    if (response.data.stats) {
+                        updateStatsDisplay(response.data.stats);
+                    }
+                }
+
+                lastUpdateTimestamp = response.data.current_timestamp;
+            },
+            error: function() {
+                console.log('Auto-update check failed, will retry in 5 seconds');
+            }
+        });
+    }
+
+    function applyRideUpdates(rides) {
+        // Don't interrupt if user is actively typing
+        if (isUserTyping) {
+            console.log('User typing, updates will apply after they finish');
+            window.pendingUpdates = rides;
+            return;
+        }
+
+        // Don't interrupt if modal/dialog is open
+        if ($('.ui-dialog:visible, .modal:visible, [role="dialog"]:visible').length > 0) {
+            console.log('Dialog open, updates will apply after close');
+            window.pendingUpdates = rides;
+            return;
+        }
+
+        // Apply updates
+        rides.forEach(function(ride) {
+            updateOrInsertRide(ride);
+        });
+
+        // Clear pending
+        window.pendingUpdates = null;
+    }
+
+    function updateOrInsertRide(ride) {
+        const existingRow = $('tr[data-ride-id="' + ride.id + '"]');
+
+        if (existingRow.length > 0) {
+            // Update existing ride (status changed, driver assigned, etc.)
+            updateExistingRow(existingRow, ride);
+        } else {
+            // New booking - insert at top
+            insertNewRide(ride);
+        }
+    }
+
+    function updateExistingRow(row, newData) {
+        // Smooth update with animation
+        row.addClass('updating');
+
+        setTimeout(function() {
+            // Update cells based on what changed
+            const statusCell = row.find('td').eq(5); // Status column
+            const driverCell = row.find('td').eq(9); // Driver column
+            const etaCell = row.find('td').eq(10); // ETA column
+            const actionsCell = row.find('td').eq(12); // Actions column
+
+            // Update status
+            statusCell.html(getStatusBadgeHtml(newData.status));
+
+            // Update driver
+            driverCell.text(newData.cab_driver_id || 'Nije dodijeljen');
+
+            // Update ETA
+            etaCell.text(newData.eta || 'N/A');
+
+            // Update action buttons
+            actionsCell.html(getActionButtonsHtml(newData));
+
+            // Flash to show change
+            row.removeClass('updating').addClass('updated');
+            setTimeout(function() {
+                row.removeClass('updated');
+            }, 2000);
+        }, 300);
+    }
+
+    function insertNewRide(ride) {
+        const newRow = buildRideRow(ride);
+
+        // Add to top of table with animation
+        $(newRow)
+            .addClass('new-ride')
+            .attr('data-ride-id', ride.id)
+            .hide()
+            .prependTo('#rides-table-body')
+            .slideDown(400, function() {
+                // Highlight briefly
+                $(this).addClass('highlight');
+                setTimeout(function() {
+                    $(newRow).removeClass('highlight');
+                }, 3000);
+            });
+    }
+
+    function buildRideRow(ride) {
+        const statusClass = 'status-' + ride.status.replace('_', '-');
+        const smsStatusLabel = getSmsStatusLabel(ride.sms_delivery_status || 'not_sent');
+
+        return '<tr data-ride-id="' + ride.id + '">' +
+            '<td>' + ride.id + '</td>' +
+            '<td>' + escapeHtml(ride.address_from) + '</td>' +
+            '<td>' + escapeHtml(ride.address_to) + '</td>' +
+            '<td>' + parseFloat(ride.distance_km).toFixed(2) + '</td>' +
+            '<td>' + parseFloat(ride.total_price).toFixed(2) + '</td>' +
+            '<td class="status ' + statusClass + '">' + getStatusBadgeHtml(ride.status) + '</td>' +
+            '<td><span class="sms-status sms-status-' + (ride.sms_delivery_status || 'not_sent') + '">' + smsStatusLabel + '</span></td>' +
+            '<td>' + escapeHtml(ride.passenger_name) + '</td>' +
+            '<td>' + escapeHtml(ride.passenger_phone) + '</td>' +
+            '<td>' + (ride.cab_driver_id || 'Nije dodijeljen') + '</td>' +
+            '<td>' + (ride.eta || 'N/A') + '</td>' +
+            '<td>' + formatDateTime(ride.created_at) + '</td>' +
+            '<td>' + getActionButtonsHtml(ride) + '</td>' +
+            '</tr>';
+    }
+
+    function getStatusBadgeHtml(status) {
+        const labels = {
+            'payed_unassigned': 'Plaćeno - Nedodijeljeno',
+            'payed_assigned': 'Dodijeljeno',
+            'completed': 'Završeno',
+            'cancelled': 'Otkazano',
+            'no_show': 'Nije se pojavio'
+        };
+        return escapeHtml(labels[status] || status);
+    }
+
+    function getActionButtonsHtml(ride) {
+        let html = '';
+        if (ride.status === 'payed_unassigned') {
+            html += '<button class="button assign-driver-btn" data-ride-id="' + ride.id + '">Dodijeli</button> ';
+            html += '<button class="button cancel-ride-btn" data-ride-id="' + ride.id + '" style="background: linear-gradient(45deg, #dc3545, #c82333); color: white; border: none;">Otkaži</button>';
+        } else if (ride.status === 'payed_assigned') {
+            html += '<button class="button button-primary complete-ride-btn" data-ride-id="' + ride.id + '">Završi</button> ';
+            html += '<button class="button cancel-ride-btn" data-ride-id="' + ride.id + '" style="background: linear-gradient(45deg, #dc3545, #c82333); color: white; border: none;">Otkaži</button>';
+        } else if (ride.status === 'cancelled') {
+            html += '<span style="color: #666; font-style: italic;">Otkazana</span>';
+            if (ride.cancellation_reason) {
+                html += '<br><small style="color: #999;">Razlog: ' + escapeHtml(ride.cancellation_reason) + '</small>';
+            }
+        } else if (ride.status === 'no_show') {
+            html += '<span style="color: #666; font-style: italic;">Nije se pojavio</span>';
+        }
+        return html;
+    }
+
+    function getSmsStatusLabel(status) {
+        const labels = {
+            'not_sent': 'Nije poslana',
+            'pending': 'Na čekanju',
+            'delivered': 'Dostavljena',
+            'failed': 'Neuspjelo',
+            'rejected': 'Odbijena',
+            'unknown': 'Nepoznato'
+        };
+        return labels[status] || status;
+    }
+
+    function formatDateTime(datetime) {
+        if (!datetime) return 'N/A';
+        const date = new Date(datetime);
+        return date.toLocaleDateString('hr-HR') + ' ' + date.toLocaleTimeString('hr-HR', {hour: '2-digit', minute: '2-digit'});
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        const map = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+        };
+        return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+    }
+
+    function alertNewBooking(newRides) {
+        // Visual alert
+        showFloatingNotification(newRides.length);
+
+        // Sound alert
+        playNotificationSound();
+
+        // Browser notification
+        if (window.Notification && Notification.permission === 'granted') {
+            new Notification('Nova rezervacija!', {
+                body: newRides.length + ' nova vožnja čeka na dodjelu',
+                icon: cityride_admin_ajax.logoUrl || '',
+                tag: 'new-booking'
+            });
+        }
+
+        // Flash browser title
+        flashBrowserTitle(newRides.length);
+    }
+
+    function showFloatingNotification(count) {
+        // Remove existing notification
+        $('.floating-notification').remove();
+
+        // Create floating notification
+        const notification = $('<div class="floating-notification">' +
+            '<div class="notification-icon">🚖</div>' +
+            '<div class="notification-content">' +
+            '<strong>Nova rezervacija!</strong>' +
+            '<p>' + count + ' vožnja čeka na dodjelu</p>' +
+            '</div>' +
+            '</div>');
+
+        $('body').append(notification);
+
+        // Auto-dismiss after 5 seconds
+        setTimeout(function() {
+            notification.fadeOut(300, function() {
+                $(this).remove();
+            });
+        }, 5000);
+    }
+
+    function flashBrowserTitle(count) {
+        const originalTitle = document.title;
+        let flashing = true;
+        let flashCount = 0;
+
+        const interval = setInterval(function() {
+            document.title = flashing ?
+                '(' + count + ') NOVA VOŽNJA!' :
+                originalTitle;
+
+            flashing = !flashing;
+            flashCount++;
+
+            // Stop after 10 flashes
+            if (flashCount >= 10) {
+                clearInterval(interval);
+                document.title = originalTitle;
+            }
+        }, 1000);
+
+        // Stop flashing when window gains focus
+        $(window).one('focus', function() {
+            clearInterval(interval);
+            document.title = originalTitle;
+        });
+    }
+
+    function playNotificationSound() {
+        if (!cityride_admin_ajax.soundEnabled || cityride_admin_ajax.soundEnabled === 'no') {
+            return;
+        }
+
+        if (cityride_admin_ajax.notificationSoundUrl) {
+            const audio = new Audio(cityride_admin_ajax.notificationSoundUrl);
+            audio.volume = 0.5;
+            audio.play().catch(function(error) {
+                console.log('Sound playback failed:', error);
+            });
+        }
+    }
+
+    // Initialize smart auto-update on CityRide pages
+    if ($('#rides-table-body').length > 0) {
+        initDashboardAutoUpdate();
+        console.log('Smart auto-update initialized (5-second intervals)');
+    }
 
     // Filter button click handler
     $('#apply-filters').on('click', function() {
