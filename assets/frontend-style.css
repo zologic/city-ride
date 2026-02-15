@@ -1334,15 +1334,15 @@ input#passenger-phone {
     color: #333 !important;
 }
 
-/* Inner wrapper - horizontal on desktop */
-#discount-code-section > div {
+/* Input group wrapper - horizontal on desktop */
+.discount-input-group {
     display: flex !important;
     flex-direction: row !important;
     gap: 8px !important;
     width: 100% !important;
 }
 
-#discount-code-input {
+.discount-input-group input {
     flex: 1 !important;
     min-height: 44px !important;
     padding: 10px 15px !important;
@@ -1353,13 +1353,13 @@ input#passenger-phone {
     box-sizing: border-box !important;
 }
 
-#discount-code-input:focus {
+.discount-input-group input:focus {
     outline: none !important;
     border-color: #667eea !important;
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
 }
 
-#apply-discount-btn {
+.discount-input-group button {
     flex: 0 0 auto !important;
     padding: 0 24px !important;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
@@ -1371,31 +1371,32 @@ input#passenger-phone {
     min-height: 44px !important;
     cursor: pointer !important;
     transition: transform 0.2s !important;
+    min-width: auto !important;
 }
 
-#apply-discount-btn:hover {
+.discount-input-group button:hover {
     transform: translateY(-2px) !important;
     box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3) !important;
 }
 
-#apply-discount-btn:active {
+.discount-input-group button:active {
     transform: translateY(0) !important;
 }
 
 /* Mobile: Stack vertically */
 @media (max-width: 480px) {
-    #discount-code-section > div {
+    .discount-input-group {
         flex-direction: column !important;
         gap: 10px !important;
     }
 
-    #discount-code-input {
+    .discount-input-group input {
         width: 100% !important;
         min-height: 48px !important;
         font-size: 16px !important;
     }
 
-    #apply-discount-btn {
+    .discount-input-group button {
         width: 100% !important;
         flex: none !important;
         padding: 12px 20px !important;
@@ -1410,12 +1411,12 @@ input#passenger-phone {
         margin: 15px 0 !important;
     }
 
-    #discount-code-input {
+    .discount-input-group input {
         font-size: 15px !important;
         padding: 10px 12px !important;
     }
 
-    #apply-discount-btn {
+    .discount-input-group button {
         font-size: 15px !important;
     }
 }
