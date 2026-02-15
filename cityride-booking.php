@@ -80,6 +80,7 @@ class CityRideBooking {
         add_option('cityride_onesignal_app_id', '');
         add_option('cityride_onesignal_api_key', '');
         add_option('cityride_make_webhook_url', '');
+        add_option('cityride_webhook_secret', '');
         add_option('cityride_start_tariff', '2.50');
         add_option('cityride_price_per_km', '1.50');
         add_option('cityride_enable_push_notifications', '1');
@@ -379,8 +380,17 @@ class CityRideBooking {
 
         $booking_id = $wpdb->insert_id;
 
-        if (get_option('cityride_enable_webhook_notifications') === '1') {
+        // Log successful booking creation
+        error_log('CityRide: Booking ' . $booking_id . ' successfully saved to database');
+
+        // Check webhook notifications setting and log
+        $webhook_enabled = get_option('cityride_enable_webhook_notifications');
+        error_log('CityRide: Webhook notifications setting: ' . ($webhook_enabled === '1' ? 'enabled' : 'disabled'));
+
+        if ($webhook_enabled === '1') {
+            error_log('CityRide: Webhook notifications enabled, triggering for booking ' . $booking_id);
             $this->send_webhook_notification($booking_id);
+            error_log('CityRide: Webhook notification call completed for booking ' . $booking_id);
         }
 
         wp_send_json_success([
@@ -430,16 +440,23 @@ class CityRideBooking {
     }
 
     /**
-     * Sends a webhook notification to Make.com for new bookings.
+     * Sends a webhook notification to Make.com/n8n for new bookings.
      *
      * @param int $booking_id The ID of the newly created booking.
      */
     private function send_webhook_notification($booking_id) {
+        // Log entry point
+        error_log('CityRide: Triggering webhook notification for booking ID: ' . $booking_id);
+
         $webhook_url = get_option('cityride_make_webhook_url');
 
         if (empty($webhook_url)) {
+            error_log('CityRide: Webhook URL not configured - skipping notification');
             return;
         }
+
+        // Log webhook URL being used
+        error_log('CityRide: Using webhook URL: ' . $webhook_url);
 
         global $wpdb;
         $table_name = $wpdb->prefix . 'cityride_rides';
@@ -447,6 +464,7 @@ class CityRideBooking {
         $ride = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $booking_id));
 
         if (!$ride) {
+            error_log('CityRide: Ride not found in database for booking_id ' . $booking_id);
             return;
         }
 
@@ -468,14 +486,79 @@ class CityRideBooking {
             'stripe_payment_id' => $ride->stripe_payment_id
         );
 
-        // Use non-blocking request for webhooks to avoid delaying user response
-        wp_remote_post($webhook_url, array(
-            'headers' => array('Content-Type' => 'application/json'),
+        // Log payload in debug mode
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('CityRide: Webhook payload: ' . json_encode($webhook_data));
+        }
+
+        // Determine if we should use blocking mode (debug) or non-blocking (production)
+        $is_debug_mode = defined('WP_DEBUG') && WP_DEBUG;
+
+        // Get webhook secret for authentication
+        $webhook_secret = get_option('cityride_webhook_secret', '');
+
+        // Build headers array
+        $headers = array('Content-Type' => 'application/json');
+
+        // Add authentication header if secret is configured
+        if (!empty($webhook_secret)) {
+            $headers['X-Webhook-Secret'] = $webhook_secret;
+        }
+
+        $request_args = array(
+            'headers' => $headers,
             'body' => json_encode($webhook_data),
-            'timeout' => 30, // Timeout in seconds
-            'blocking' => false, // Make the request asynchronous
-            'sslverify' => defined('WP_DEBUG') && WP_DEBUG ? false : true // Set to true in production for security
-        ));
+            'timeout' => 30,
+            'blocking' => $is_debug_mode, // Blocking in debug mode, non-blocking in production
+            'sslverify' => !$is_debug_mode // Disable SSL verify only in debug mode
+        );
+
+        $response = wp_remote_post($webhook_url, $request_args);
+
+        // Only capture and log response in debug mode (when blocking is enabled)
+        if ($is_debug_mode) {
+            if (is_wp_error($response)) {
+                $error_message = $response->get_error_message();
+                error_log('CityRide: Webhook failed - Error: ' . $error_message);
+
+                // Store webhook status in debug mode
+                update_option('cityride_last_webhook_status', array(
+                    'timestamp' => current_time('mysql'),
+                    'booking_id' => $booking_id,
+                    'status' => 'failed',
+                    'error' => $error_message,
+                    'http_code' => null
+                ));
+            } else {
+                $response_code = wp_remote_retrieve_response_code($response);
+
+                if ($response_code >= 200 && $response_code < 300) {
+                    error_log('CityRide: Webhook delivered successfully - HTTP ' . $response_code);
+
+                    // Store success status in debug mode
+                    update_option('cityride_last_webhook_status', array(
+                        'timestamp' => current_time('mysql'),
+                        'booking_id' => $booking_id,
+                        'status' => 'success',
+                        'http_code' => $response_code,
+                        'error' => null
+                    ));
+                } else {
+                    error_log('CityRide: Webhook delivered but returned HTTP ' . $response_code . ' - Check n8n/Make.com workflow configuration');
+
+                    // Store failure status in debug mode
+                    update_option('cityride_last_webhook_status', array(
+                        'timestamp' => current_time('mysql'),
+                        'booking_id' => $booking_id,
+                        'status' => 'failed',
+                        'http_code' => $response_code,
+                        'error' => 'HTTP ' . $response_code . ' response'
+                    ));
+                }
+            }
+        }
+
+        error_log('CityRide: Webhook notification sent for booking ' . $booking_id);
     }
 
     /**
@@ -594,6 +677,7 @@ class CityRideBooking {
         register_setting('cityride_settings', 'cityride_onesignal_app_id');
         register_setting('cityride_settings', 'cityride_onesignal_api_key');
         register_setting('cityride_settings', 'cityride_make_webhook_url');
+        register_setting('cityride_settings', 'cityride_webhook_secret');
         register_setting('cityride_settings', 'cityride_start_tariff');
         register_setting('cityride_settings', 'cityride_price_per_km');
         register_setting('cityride_settings', 'cityride_enable_push_notifications');
@@ -962,7 +1046,15 @@ public function admin_enqueue_scripts($hook) {
                     </tr>
                     <tr valign="top">
                         <th scope="row">Make.com Webhook URL</th>
-                        <td><input type="url" name="cityride_make_webhook_url" value="<?php echo esc_attr(get_option('cityride_make_webhook_url')); ?>" class="regular-text" /><p class="description">URL za slanje podataka o novim vožnjama na Make.com.</p></td>
+                        <td><input type="url" name="cityride_make_webhook_url" value="<?php echo esc_attr(get_option('cityride_make_webhook_url')); ?>" class="regular-text" /><p class="description">URL za slanje podataka o novim vožnjama na Make.com/n8n.</p></td>
+                    </tr>
+                    <tr valign="top">
+                        <th scope="row">Webhook Secret Key</th>
+                        <td>
+                            <input type="text" id="cityride_webhook_secret" name="cityride_webhook_secret" value="<?php echo esc_attr(get_option('cityride_webhook_secret', '')); ?>" class="regular-text" placeholder="Enter secret key for webhook authentication" />
+                            <button type="button" onclick="generateWebhookSecret()" class="button" style="margin-left: 5px;">Generate Random Key</button>
+                            <p class="description">Secret key sent in X-Webhook-Secret header for authentication. Configure the same secret in your n8n webhook node (Header Auth).</p>
+                        </td>
                     </tr>
                     <tr valign="top">
                         <th scope="row">Startna tarifa (BAM)</th>
@@ -994,9 +1086,58 @@ public function admin_enqueue_scripts($hook) {
                             <div id="test-webhook-message" style="margin-top: 10px;"></div>
                         </td>
                     </tr>
+                    <tr valign="top">
+                        <th scope="row">Status Posljednjeg Webhooka</th>
+                        <td>
+                            <?php
+                            $last_webhook_status = get_option('cityride_last_webhook_status');
+                            if ($last_webhook_status && is_array($last_webhook_status)) {
+                                $status_class = $last_webhook_status['status'] === 'success' ? 'notice-success' : 'notice-error';
+                                $status_text = $last_webhook_status['status'] === 'success' ? 'Uspješno' : 'Neuspješno';
+                                $status_icon = $last_webhook_status['status'] === 'success' ? '✅' : '❌';
+                                ?>
+                                <div class="notice <?php echo esc_attr($status_class); ?> inline" style="margin: 0; padding: 10px;">
+                                    <p style="margin: 0;">
+                                        <strong><?php echo $status_icon; ?> Status:</strong> <?php echo esc_html($status_text); ?><br>
+                                        <strong>Vrijeme:</strong> <?php echo esc_html($last_webhook_status['timestamp']); ?><br>
+                                        <strong>Booking ID:</strong> <?php echo esc_html($last_webhook_status['booking_id']); ?><br>
+                                        <?php if (isset($last_webhook_status['http_code']) && $last_webhook_status['http_code']): ?>
+                                            <strong>HTTP kod:</strong> <?php echo esc_html($last_webhook_status['http_code']); ?><br>
+                                        <?php endif; ?>
+                                        <?php if (isset($last_webhook_status['error']) && $last_webhook_status['error']): ?>
+                                            <strong>Greška:</strong> <?php echo esc_html($last_webhook_status['error']); ?>
+                                        <?php endif; ?>
+                                    </p>
+                                </div>
+                                <p class="description">
+                                    Dostupno samo u DEBUG modu (kada je WP_DEBUG omogućen).
+                                    Provjerite <code>/wp-content/debug.log</code> za detaljne logove.
+                                </p>
+                            <?php } else { ?>
+                                <p class="description">
+                                    Nema zabilježenog statusa. Omogućite WP_DEBUG u <code>wp-config.php</code> da vidite status webhooks-a.
+                                </p>
+                            <?php } ?>
+                        </td>
+                    </tr>
                 </table>
                 <?php submit_button(); ?>
             </form>
+
+            <script>
+            function generateWebhookSecret() {
+                // Generate 32-character random hex string (128 bits of entropy)
+                const array = new Uint8Array(16);
+                crypto.getRandomValues(array);
+                const secret = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+
+                // Set the value in the input field
+                document.getElementById('cityride_webhook_secret').value = secret;
+
+                // Show success message
+                alert('Random webhook secret generated! Make sure to:\n1. Save this configuration\n2. Copy this secret to your n8n webhook node (Header Auth)\n3. Header name: X-Webhook-Secret\n4. Header value: ' + secret);
+            }
+            </script>
         </div>
         <?php
     }
@@ -1567,8 +1708,15 @@ public function admin_enqueue_scripts($hook) {
         } else {
             $booking_id = $wpdb->insert_id;
             error_log('CityRide Webhook: Successfully created booking ' . $booking_id . ' from PaymentIntent ' . $payment_intent_id);
-            if (get_option('cityride_enable_webhook_notifications') === '1') {
+
+            // Check webhook notifications setting and trigger if enabled
+            $webhook_enabled = get_option('cityride_enable_webhook_notifications');
+            if ($webhook_enabled === '1') {
+                error_log('CityRide: Stripe webhook received, triggering notification for booking ' . $booking_id);
                 $this->send_webhook_notification($booking_id);
+                error_log('CityRide: Stripe webhook notification completed for booking ' . $booking_id);
+            } else {
+                error_log('CityRide: Stripe webhook notifications disabled, skipping notification for booking ' . $booking_id);
             }
         }
     }
