@@ -995,3 +995,104 @@ body {
     max-width: 100% !important;
     padding: 0 !important;
 }
+
+/* International Phone Input Styling */
+.iti {
+    width: 100%;
+    display: block;
+}
+
+.iti__country-list {
+    z-index: 9999;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    border-radius: 8px;
+    max-height: 200px;
+}
+
+.iti__flag-container {
+    padding: 0;
+}
+
+.iti__selected-flag {
+    padding: 0 12px;
+    border-right: 1px solid #e0e0e0;
+    background-color: #f5f5f5;
+    transition: background-color 0.3s ease;
+}
+
+.iti__selected-flag:hover {
+    background-color: #ebebeb;
+}
+
+.phone-input {
+    width: 100% !important;
+    padding: 12px 12px 12px 60px !important;
+    border: 1px solid #ccc !important;
+    border-radius: 8px !important;
+    font-size: 1rem !important;
+    transition: border-color 0.3s ease;
+}
+
+.phone-input:focus {
+    outline: none !important;
+    border-color: #4CAF50 !important;
+}
+
+.phone-input.valid {
+    border-color: #28a745 !important;
+    background-color: #f0fff4 !important;
+}
+
+.phone-input.error {
+    border-color: #dc3545 !important;
+    background-color: #fff5f5 !important;
+}
+
+.phone-hint {
+    font-size: 11px;
+    color: #666;
+    font-weight: normal;
+    margin-left: 5px;
+}
+
+.error-message {
+    display: block;
+    color: #dc3545;
+    font-size: 0.9rem;
+    margin-top: 5px;
+}
+
+.phone-success {
+    display: block;
+    color: #28a745;
+    font-size: 0.9rem;
+    margin-top: 5px;
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+    .iti__country-list {
+        max-height: 70vh;
+    }
+
+    .iti__country {
+        padding: 12px 15px;
+        font-size: 16px;
+    }
+
+    .phone-input {
+        font-size: 16px !important;
+        min-height: 48px !important;
+        padding: 14px 14px 14px 65px !important;
+    }
+
+    .iti__selected-flag {
+        padding: 0 10px;
+    }
+}
+
+@media (max-width: 480px) {
+    .phone-input {
+        padding: 12px 12px 12px 60px !important;
+    }
+}

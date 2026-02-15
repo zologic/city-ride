@@ -99,6 +99,39 @@ class CityRideBooking {
     }
 
     /**
+     * Normalizes phone number to international format
+     * Ensures consistent format: +387XXXXXXXXX
+     *
+     * @param string $phone The phone number to normalize
+     * @return string Normalized phone number in international format
+     */
+    private function normalize_phone_number($phone) {
+        if (empty($phone)) {
+            return '';
+        }
+
+        // Remove all non-digit characters except +
+        $phone = preg_replace('/[^\d+]/', '', $phone);
+
+        // If already starts with +, return as is (assuming it's correctly formatted)
+        if (substr($phone, 0, 1) === '+') {
+            return $phone;
+        }
+
+        // Remove leading zero
+        $phone = ltrim($phone, '0');
+
+        // Add Bosnia country code if not present
+        if (substr($phone, 0, 3) !== '387') {
+            $phone = '+387' . $phone;
+        } else {
+            $phone = '+' . $phone;
+        }
+
+        return $phone;
+    }
+
+    /**
      * Plugin activation hook. Creates the database table and sets default options.
      */
     public function activate() {
@@ -433,10 +466,17 @@ class CityRideBooking {
         $address_to = sanitize_text_field($_POST['address_to']);
         $distance_km = floatval($_POST['distance_km']);
         $passenger_name = sanitize_text_field($_POST['passenger_name']);
-        $passenger_phone = sanitize_text_field($_POST['passenger_phone']);
+        $passenger_phone = $this->normalize_phone_number(sanitize_text_field($_POST['passenger_phone']));
+        $passenger_phone_country = sanitize_text_field($_POST['passenger_phone_country'] ?? '');
+        $passenger_phone_dialcode = sanitize_text_field($_POST['passenger_phone_dialcode'] ?? '');
         $passenger_email = sanitize_email($_POST['passenger_email'] ?? '');
         // OneSignal player ID is added to metadata here
         $passenger_onesignal_id = sanitize_text_field($_POST['passenger_onesignal_id'] ?? '');
+
+        // Validate E.164 format
+        if (!empty($passenger_phone) && !preg_match('/^\+[1-9]\d{1,14}$/', $passenger_phone)) {
+            wp_send_json_error('Nevažeći format broja telefona');
+        }
 
         if (empty($amount) || $amount <= 0) {
             wp_send_json_error('Nevažeći iznos');
@@ -575,9 +615,16 @@ class CityRideBooking {
         $distance_km = floatval($_POST['distance_km']);
         $total_price = floatval($_POST['total_price']);
         $passenger_name = sanitize_text_field($_POST['passenger_name']);
-        $passenger_phone = sanitize_text_field($_POST['passenger_phone']);
+        $passenger_phone = $this->normalize_phone_number(sanitize_text_field($_POST['passenger_phone']));
+        $passenger_phone_country = sanitize_text_field($_POST['passenger_phone_country'] ?? '');
+        $passenger_phone_dialcode = sanitize_text_field($_POST['passenger_phone_dialcode'] ?? '');
         $passenger_email = sanitize_email($_POST['passenger_email'] ?? '');
         $passenger_onesignal_id = sanitize_text_field($_POST['passenger_onesignal_id'] ?? ''); // Expecting this from frontend
+
+        // Validate E.164 format
+        if (!empty($passenger_phone) && !preg_match('/^\+[1-9]\d{1,14}$/', $passenger_phone)) {
+            wp_send_json_error('Nevažeći format broja telefona');
+        }
 
         // Discount code information
         $discount_code = isset($_POST['discount_code']) ? strtoupper(trim(sanitize_text_field($_POST['discount_code']))) : '';
@@ -608,6 +655,8 @@ class CityRideBooking {
             array(
                 'passenger_name' => $passenger_name,
                 'passenger_phone' => $passenger_phone,
+                'passenger_phone_country' => !empty($passenger_phone_country) ? $passenger_phone_country : null,
+                'passenger_phone_dialcode' => !empty($passenger_phone_dialcode) ? $passenger_phone_dialcode : null,
                 'address_from' => $address_from,
                 'address_to' => $address_to,
                 'distance_km' => $distance_km,
@@ -624,7 +673,7 @@ class CityRideBooking {
                 'updated_at' => current_time('mysql')
             ),
             array(
-                '%s', '%s', '%s', '%s', '%f', '%f', '%s', '%f', '%f', '%f', '%s', '%s', '%s', '%s', '%s', '%s'
+                '%s', '%s', '%s', '%s', '%s', '%s', '%f', '%f', '%s', '%f', '%f', '%f', '%s', '%s', '%s', '%s', '%s', '%s'
             )
         );
 
@@ -858,12 +907,8 @@ class CityRideBooking {
             return;
         }
 
-        // Format phone number to international format (+387 for Bosnia)
-        $phone = $ride_data['passenger_phone'];
-        if (!empty($phone) && substr($phone, 0, 1) !== '+') {
-            // Remove leading zero and add Bosnia country code
-            $phone = '+387' . ltrim($phone, '0');
-        }
+        // Ensure phone number is in international format
+        $phone = $this->normalize_phone_number($ride_data['passenger_phone']);
 
         // Build base payload
         $payload = array(
@@ -1341,6 +1386,19 @@ class CityRideBooking {
             error_log('CityRide: Database schema updated - added cancelled and no_show statuses');
         }
 
+        // Check if phone metadata columns exist
+        $phone_metadata_check = $wpdb->get_results("SHOW COLUMNS FROM $table_name LIKE 'passenger_phone_country'");
+
+        if (empty($phone_metadata_check)) {
+            // Add phone metadata columns for international support
+            $wpdb->query("ALTER TABLE $table_name
+                ADD COLUMN passenger_phone_country VARCHAR(2) DEFAULT NULL AFTER passenger_phone,
+                ADD COLUMN passenger_phone_dialcode VARCHAR(5) DEFAULT NULL AFTER passenger_phone_country
+            ");
+
+            error_log('CityRide: Database schema updated - added phone metadata columns (country, dialcode)');
+        }
+
         // Check if pricing columns exist
         $pricing_check = $wpdb->get_results("SHOW COLUMNS FROM $table_name LIKE 'discount_code'");
 
@@ -1559,9 +1617,15 @@ public function admin_enqueue_scripts($hook) {
         wp_enqueue_style( 'font-awesome', 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css', array(), '5.15.4', 'all' );
         wp_enqueue_style('mapbox-gl-css', 'https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css');
 
+        // International phone input CSS
+        wp_enqueue_style('intl-tel-input-css', 'https://cdn.jsdelivr.net/npm/intl-tel-input@18.5.3/build/css/intlTelInput.css', array(), '18.5.3');
+
         // Mapbox JS and Stripe JS
         wp_enqueue_script('mapbox-gl-js', 'https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js', array(), null, true);
         wp_enqueue_script('stripe-js', 'https://js.stripe.com/v3/', array(), null, true);
+
+        // International phone input JS
+        wp_enqueue_script('intl-tel-input-js', 'https://cdn.jsdelivr.net/npm/intl-tel-input@18.5.3/build/js/intlTelInput.min.js', array(), '18.5.3', true);
 
         // --- OVDJE JE UKLONJENA ONE SIGNAL INICIJALIZACIJA ---
         // OneSignal WordPress plugin se brine za učitavanje i inicijalizaciju OneSignal SDK-a.
@@ -1570,7 +1634,7 @@ public function admin_enqueue_scripts($hook) {
 
         // Enqueue frontend JS with file modification time for cache busting (loads .min version unless SCRIPT_DEBUG)
         $frontend_js_path = 'assets/frontend-script.js';
-        wp_enqueue_script('cityride-frontend-js', $this->get_asset_url($frontend_js_path), array('jquery', 'mapbox-gl-js', 'stripe-js'), $this->get_asset_version($frontend_js_path), true);
+        wp_enqueue_script('cityride-frontend-js', $this->get_asset_url($frontend_js_path), array('jquery', 'mapbox-gl-js', 'stripe-js', 'intl-tel-input-js'), $this->get_asset_version($frontend_js_path), true);
 
         // Localize script for frontend AJAX calls
         wp_localize_script('cityride-frontend-js', 'cityride_frontend_ajax', array(
@@ -1622,8 +1686,18 @@ public function admin_enqueue_scripts($hook) {
                         <input type="text" id="passenger-name" placeholder="Puno ime" required>
                     </div>
                     <div class="form-group">
-                        <label for="passenger-phone">Vaš broj telefona:</label>
-                        <input type="tel" id="passenger-phone" placeholder="Broj telefona" required>
+                        <label for="passenger-phone">
+                            Broj telefona *
+                            <span class="phone-hint">(Podržani svi svjetski brojevi)</span>
+                        </label>
+                        <input type="tel" id="passenger-phone" name="passenger_phone" class="phone-input" required placeholder="">
+                        <input type="hidden" id="passenger-phone-full" name="passenger_phone_full">
+                        <input type="hidden" id="passenger-phone-country" name="passenger_phone_country">
+                        <input type="hidden" id="passenger-phone-dialcode" name="passenger_phone_dialcode">
+                        <div id="phone-error" class="error-message" style="display:none; color: #dc3545; margin-top: 5px; font-size: 0.9rem;"></div>
+                        <small class="phone-success" style="display:none; color: #28a745; margin-top: 5px; font-size: 0.9rem;">
+                            ✓ Broj telefona je važeći
+                        </small>
                     </div>
                 </div>
                 <div class="form-group"> <label for="passenger-email">Vaš Email (opciono):</label>
@@ -1660,41 +1734,41 @@ public function admin_enqueue_scripts($hook) {
                         </div>
                         <p class="disclaimer">Provjerite da su adrese ispravno označene na mapi – pogrešan broj ili naziv ulice može uticati na proračun.</p>
                     </div>
-
-                    <!-- Discount Code Section -->
-                    <div id="discount-code-section" class="discount-code-section" style="margin-top: 25px; display: none;">
-                        <label for="discount-code-input" style="display: block; font-weight: 700; margin-bottom: 10px; color: #444;">
-                            🎁 Imate kod popusta?
-                        </label>
-                        <div style="display: flex; gap: 10px; align-items: flex-start;">
-                            <input type="text" id="discount-code-input" placeholder="Unesite kod" style="flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 1rem; text-transform: uppercase;">
-                            <button type="button" id="apply-discount-btn" class="btn btn-primary" style="min-width: auto; padding: 12px 24px;">Primijeni</button>
-                        </div>
-                        <div id="discount-message" style="margin-top: 10px; font-weight: 600;"></div>
-                        <div id="discount-details" style="display: none; margin-top: 15px; padding: 15px; background: #e6ffe6; border-radius: 8px; border: 1px solid #4CAF50;">
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                                <span style="color: #555;">Originalna cijena:</span>
-                                <span id="discount-original-price" style="text-decoration: line-through; color: #999;"></span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                                <span style="color: #555; font-weight: 700;">Popust (<span id="discount-code-used"></span>):</span>
-                                <span id="discount-amount" style="color: #4CAF50; font-weight: 700;"></span>
-                            </div>
-                            <div style="border-top: 2px solid #4CAF50; margin: 10px 0; padding-top: 10px; display: flex; justify-content: space-between;">
-                                <span style="font-weight: 800; font-size: 1.1rem;">Nova cijena:</span>
-                                <span id="discount-final-price" style="font-weight: 900; font-size: 1.3rem; color: #E65100;"></span>
-                            </div>
-                            <button type="button" id="remove-discount-btn" class="btn" style="width: 100%; margin-top: 10px; padding: 8px; background: #f44336; color: white; min-width: auto;">
-                                Ukloni popust
-                            </button>
-                        </div>
-                    </div>
                 </div>
                 <input type="hidden" id="calculated_distance_km" name="distance_km">
                 <input type="hidden" id="calculated_total_price" name="total_price">
                 <input type="hidden" id="calculated_stripe_amount" name="stripe_amount">
                 <input type="hidden" id="discount_code_applied" name="discount_code">
                 <input type="hidden" id="discount_amount_applied" name="discount_amount" value="0">
+
+                <!-- Discount Code Section - Moved above payment section -->
+                <div id="discount-code-section" class="discount-code-section" style="margin-top: 25px; display: none;">
+                    <label for="discount-code-input" style="display: block; font-weight: 700; margin-bottom: 10px; color: #444;">
+                        🎟️ Imate kod popusta?
+                    </label>
+                    <div style="display: flex; gap: 10px; align-items: flex-start;">
+                        <input type="text" id="discount-code-input" placeholder="Unesite kod" style="flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 1rem; text-transform: uppercase;">
+                        <button type="button" id="apply-discount-btn" class="btn btn-primary" style="min-width: auto; padding: 12px 24px;">Primijeni</button>
+                    </div>
+                    <div id="discount-message" style="margin-top: 10px; font-weight: 600;"></div>
+                    <div id="discount-details" style="display: none; margin-top: 15px; padding: 15px; background: #e6ffe6; border-radius: 8px; border: 1px solid #4CAF50;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span style="color: #555;">Originalna cijena:</span>
+                            <span id="discount-original-price" style="text-decoration: line-through; color: #999;"></span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span style="color: #555; font-weight: 700;">Popust (<span id="discount-code-used"></span>):</span>
+                            <span id="discount-amount" style="color: #4CAF50; font-weight: 700;"></span>
+                        </div>
+                        <div style="border-top: 2px solid #4CAF50; margin: 10px 0; padding-top: 10px; display: flex; justify-content: space-between;">
+                            <span style="font-weight: 800; font-size: 1.1rem;">Nova cijena:</span>
+                            <span id="discount-final-price" style="font-weight: 900; font-size: 1.3rem; color: #E65100;"></span>
+                        </div>
+                        <button type="button" id="remove-discount-btn" class="btn" style="width: 100%; margin-top: 10px; padding: 8px; background: #f44336; color: white; min-width: auto;">
+                            Ukloni popust
+                        </button>
+                    </div>
+                </div>
 
                 <div id="payment-section" class="payment-section" style="display: none;"> <div class="payment-header">
                         <div class="card-icons">
