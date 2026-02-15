@@ -63,6 +63,7 @@ class CityRideBooking {
 
         // AJAX hooks for admin (requires authentication)
         add_action('wp_ajax_cityride_load_rides', array($this, 'ajax_load_rides'));
+        add_action('wp_ajax_cityride_get_ride_updates', array($this, 'ajax_get_ride_updates'));
         add_action('wp_ajax_cityride_assign_driver', array($this, 'ajax_assign_driver'));
         add_action('wp_ajax_cityride_complete_ride', array($this, 'ajax_complete_ride'));
         add_action('wp_ajax_cityride_cancel_ride', array($this, 'ajax_cancel_ride'));
@@ -1533,7 +1534,10 @@ public function admin_enqueue_scripts($hook) {
         // Localize script to pass AJAX URL and nonce to JavaScript
         wp_localize_script('cityride-admin-js', 'cityride_admin_ajax', array(
             'ajax_url' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('cityride_admin_nonce')
+            'nonce' => wp_create_nonce('cityride_admin_nonce'),
+            'notificationSoundUrl' => CITYRIDE_PLUGIN_URL . 'assets/notification.mp3',
+            'soundEnabled' => get_option('cityride_sound_notifications', 'yes'),
+            'logoUrl' => CITYRIDE_PLUGIN_URL . 'assets/images/city-ride-logo.png'
         ));
 
         // Load Chart.js and analytics script only on analytics page
@@ -2361,6 +2365,108 @@ public function admin_enqueue_scripts($hook) {
             'current_page' => $page,
             'stats' => $stats // Include statistics in the response
         ]);
+    }
+
+    /**
+     * AJAX handler for getting ride updates (smart auto-update)
+     * Returns only rides that were created or updated since the last check
+     */
+    public function ajax_get_ride_updates() {
+        check_ajax_referer('cityride_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Nemate ovlaštenje za pristup.');
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'cityride_rides';
+
+        $since = sanitize_text_field($_POST['since'] ?? '');
+        $filters = isset($_POST['current_filters']) ? $_POST['current_filters'] : array();
+
+        // Build WHERE clause
+        $where_clauses = array();
+        $query_args = array();
+
+        // Only get rides updated since last check
+        if (!empty($since)) {
+            $where_clauses[] = '(updated_at > %s OR created_at > %s)';
+            $query_args[] = $since;
+            $query_args[] = $since;
+        }
+
+        // Apply current filters so new rides match what dispatcher is viewing
+        if (!empty($filters['status']) && $filters['status'] !== 'all') {
+            $where_clauses[] = 'status = %s';
+            $query_args[] = $filters['status'];
+        }
+
+        if (!empty($filters['date_from'])) {
+            $where_clauses[] = 'created_at >= %s';
+            $query_args[] = $filters['date_from'] . ' 00:00:00';
+        }
+
+        if (!empty($filters['date_to'])) {
+            $where_clauses[] = 'created_at <= %s';
+            $query_args[] = $filters['date_to'] . ' 23:59:59';
+        }
+
+        if (!empty($filters['search'])) {
+            $search = '%' . $wpdb->esc_like($filters['search']) . '%';
+            $where_clauses[] = '(passenger_name LIKE %s OR passenger_phone LIKE %s OR address_from LIKE %s OR address_to LIKE %s OR cab_driver_id LIKE %s OR id = %d)';
+            $query_args[] = $search;
+            $query_args[] = $search;
+            $query_args[] = $search;
+            $query_args[] = $search;
+            $query_args[] = $search;
+            $query_args[] = intval($filters['search']);
+        }
+
+        $where_sql = '';
+        if (!empty($where_clauses)) {
+            $where_sql = 'WHERE ' . implode(' AND ', $where_clauses);
+        }
+
+        // Get updated/new rides
+        $rides = array();
+        if (!empty($query_args)) {
+            $rides = $wpdb->get_results($wpdb->prepare(
+                "SELECT * FROM $table_name
+                 $where_sql
+                 ORDER BY created_at DESC
+                 LIMIT 50",
+                ...$query_args
+            ), ARRAY_A);
+        } elseif (!empty($where_sql)) {
+            $rides = $wpdb->get_results(
+                "SELECT * FROM $table_name
+                 $where_sql
+                 ORDER BY created_at DESC
+                 LIMIT 50",
+                ARRAY_A
+            );
+        }
+
+        // Get fresh statistics
+        $stats = $this->get_ride_statistics();
+
+        // Count unassigned rides
+        $unassigned_count = 0;
+        if (!empty($rides)) {
+            foreach ($rides as $ride) {
+                if ($ride['status'] === 'payed_unassigned') {
+                    $unassigned_count++;
+                }
+            }
+        }
+
+        wp_send_json_success(array(
+            'rides' => $rides,
+            'count' => count($rides),
+            'current_timestamp' => current_time('mysql'),
+            'unassigned_count' => $unassigned_count,
+            'stats' => $stats
+        ));
     }
 
     /**
