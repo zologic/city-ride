@@ -1746,9 +1746,9 @@ public function admin_enqueue_scripts($hook) {
                     <label for="discount-code-input" style="display: block; font-weight: 700; margin-bottom: 10px; color: #444;">
                         🎟️ Imate kod popusta?
                     </label>
-                    <div style="display: flex; gap: 10px; align-items: flex-start;">
-                        <input type="text" id="discount-code-input" placeholder="Unesite kod" style="flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 1rem; text-transform: uppercase;">
-                        <button type="button" id="apply-discount-btn" class="btn btn-primary" style="min-width: auto; padding: 12px 24px;">Primijeni</button>
+                    <div class="discount-input-group">
+                        <input type="text" id="discount-code-input" placeholder="Unesite kod">
+                        <button type="button" id="apply-discount-btn" class="btn btn-primary">Primijeni</button>
                     </div>
                     <div id="discount-message" style="margin-top: 10px; font-weight: 600;"></div>
                     <div id="discount-details" style="display: none; margin-top: 15px; padding: 15px; background: #e6ffe6; border-radius: 8px; border: 1px solid #4CAF50;">
