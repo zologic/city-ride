@@ -715,4 +715,75 @@ jQuery(document).ready(function($) {
             removeDiscountBtn.click();
         }
     });
+
+    /**
+     * FORCE DISCOUNT SECTION VERTICAL LAYOUT
+     * Remove all inline styles that prevent CSS from working
+     */
+    function forceDiscountVerticalLayout() {
+        const discountSection = document.getElementById('discount-code-section');
+        const discountGroup = document.querySelector('.discount-input-group');
+        const discountInput = document.getElementById('discount-code-input');
+        const discountBtn = document.getElementById('apply-discount-btn');
+
+        if (discountGroup) {
+            // Force vertical layout on the group
+            discountGroup.style.setProperty('display', 'flex', 'important');
+            discountGroup.style.setProperty('flex-direction', 'column', 'important');
+            discountGroup.style.setProperty('gap', '10px', 'important');
+            discountGroup.style.setProperty('width', '100%', 'important');
+            discountGroup.style.setProperty('align-items', 'stretch', 'important');
+        }
+
+        if (discountInput) {
+            // Force input styling
+            discountInput.style.setProperty('width', '100%', 'important');
+            discountInput.style.setProperty('padding', '12px 15px', 'important');
+            discountInput.style.setProperty('border', '2px solid #e0e0e0', 'important');
+            discountInput.style.setProperty('border-radius', '8px', 'important');
+            discountInput.style.setProperty('font-size', '15px', 'important');
+            discountInput.style.setProperty('box-sizing', 'border-box', 'important');
+            discountInput.style.setProperty('background', 'white', 'important');
+            discountInput.style.setProperty('min-height', '44px', 'important');
+            discountInput.style.setProperty('flex', 'none', 'important');
+
+            // Ensure placeholder is set
+            if (!discountInput.getAttribute('placeholder')) {
+                discountInput.setAttribute('placeholder', 'Unesite kod');
+            }
+        }
+
+        if (discountBtn) {
+            // Force button styling
+            discountBtn.style.setProperty('width', '100%', 'important');
+            discountBtn.style.setProperty('padding', '12px 20px', 'important');
+            discountBtn.style.setProperty('font-size', '16px', 'important');
+            discountBtn.style.setProperty('min-height', '44px', 'important');
+            discountBtn.style.setProperty('flex', 'none', 'important');
+            discountBtn.style.setProperty('min-width', 'auto', 'important');
+        }
+    }
+
+    // Run immediately
+    forceDiscountVerticalLayout();
+
+    // Run again after short delay (in case discount section is shown dynamically)
+    setTimeout(forceDiscountVerticalLayout, 500);
+
+    // Run whenever discount section becomes visible
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
+                const target = mutation.target;
+                if (target.id === 'discount-code-section' && target.style.display !== 'none') {
+                    setTimeout(forceDiscountVerticalLayout, 50);
+                }
+            }
+        });
+    });
+
+    const discountSectionEl = document.getElementById('discount-code-section');
+    if (discountSectionEl) {
+        observer.observe(discountSectionEl, { attributes: true, attributeFilter: ['style'] });
+    }
 });
