@@ -214,19 +214,36 @@ jQuery(document).ready(function($) {
             utilsScript: "https://cdn.jsdelivr.net/npm/intl-tel-input@18.5.3/build/js/utils.js"
         });
 
-        // Validate on blur
+        let hasInteracted = false;
+
+        // Mark as interacted on first input
+        input.addEventListener('focus', function() {
+            hasInteracted = true;
+        });
+
+        // Validate on blur (only if user has interacted)
         input.addEventListener('blur', function() {
-            validatePhoneNumber();
+            if (hasInteracted && input.value.trim()) {
+                validatePhoneNumber();
+            }
         });
 
-        // Validate on country change
+        // Update hidden field on country change (but don't validate during init)
         input.addEventListener('countrychange', function() {
-            validatePhoneNumber();
+            if (hasInteracted && input.value.trim()) {
+                validatePhoneNumber();
+            } else {
+                updateHiddenPhoneField();
+            }
         });
 
-        // Update hidden field on input
+        // Update hidden field on input (but don't show errors while typing)
         input.addEventListener('input', function() {
             updateHiddenPhoneField();
+            // Clear error messages while typing
+            if (input.value.trim()) {
+                hidePhoneMessages();
+            }
         });
     }
 
@@ -240,6 +257,13 @@ jQuery(document).ready(function($) {
             return false;
         }
 
+        // Don't show errors if the input is very short (user is still typing)
+        const phoneDigits = input.value.replace(/\D/g, '');
+        if (phoneDigits.length < 4) {
+            hidePhoneMessages();
+            return false;
+        }
+
         if (iti && iti.isValidNumber()) {
             input.classList.remove('error');
             input.classList.add('valid');
@@ -248,22 +272,27 @@ jQuery(document).ready(function($) {
             updateHiddenPhoneField();
             return true;
         } else {
-            input.classList.add('error');
-            input.classList.remove('valid');
-            successMsg.style.display = 'none';
+            // Only show error if the number is "complete enough" (6+ digits)
+            if (phoneDigits.length >= 6) {
+                input.classList.add('error');
+                input.classList.remove('valid');
+                successMsg.style.display = 'none';
 
-            const errorCode = iti ? iti.getValidationError() : 0;
-            const errorMessages = {
-                0: 'Nevažeći broj telefona',
-                1: 'Nevažeći kod države',
-                2: 'Broj telefona je prekratak',
-                3: 'Broj telefona je predug',
-                4: 'Nevažeći broj telefona',
-                5: 'Nevažeći broj telefona'
-            };
+                const errorCode = iti ? iti.getValidationError() : 0;
+                const errorMessages = {
+                    0: 'Nevažeći broj telefona',
+                    1: 'Nevažeći kod države',
+                    2: 'Broj telefona je prekratak',
+                    3: 'Broj telefona je predug',
+                    4: 'Nevažeći broj telefona',
+                    5: 'Nevažeći broj telefona'
+                };
 
-            errorMsg.textContent = errorMessages[errorCode] || 'Nevažeći broj telefona';
-            errorMsg.style.display = 'block';
+                errorMsg.textContent = errorMessages[errorCode] || 'Nevažeći broj telefona';
+                errorMsg.style.display = 'block';
+            } else {
+                hidePhoneMessages();
+            }
             return false;
         }
     }
