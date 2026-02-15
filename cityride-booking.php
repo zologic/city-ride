@@ -583,8 +583,19 @@ class CityRideBooking {
             'message' => 'Ovo je testna poruka iz CityRide WordPress plugin-a.'
         );
 
+        // Get webhook secret for authentication
+        $webhook_secret = get_option('cityride_webhook_secret', '');
+
+        // Build headers array
+        $headers = array('Content-Type' => 'application/json');
+
+        // Add authentication header if secret is configured
+        if (!empty($webhook_secret)) {
+            $headers['X-Webhook-Secret'] = $webhook_secret;
+        }
+
         $response = wp_remote_post($webhook_url, array(
-            'headers' => array('Content-Type' => 'application/json'),
+            'headers' => $headers,
             'body' => json_encode($test_data),
             'timeout' => 10,
             'sslverify' => defined('WP_DEBUG') && WP_DEBUG ? false : true
