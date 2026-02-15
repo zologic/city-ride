@@ -717,35 +717,51 @@ jQuery(document).ready(function($) {
     });
 
     /**
-     * FORCE DISCOUNT SECTION VERTICAL LAYOUT
-     * Remove all inline styles that prevent CSS from working
+     * FORCE DISCOUNT SECTION RESPONSIVE LAYOUT
+     * Desktop: Horizontal (input and button side-by-side)
+     * Mobile: Vertical (input above button)
      */
-    function forceDiscountVerticalLayout() {
-        const discountSection = document.getElementById('discount-code-section');
+    function forceDiscountResponsiveLayout() {
         const discountGroup = document.querySelector('.discount-input-group');
         const discountInput = document.getElementById('discount-code-input');
         const discountBtn = document.getElementById('apply-discount-btn');
+        const isMobile = window.innerWidth <= 768;
 
         if (discountGroup) {
-            // Force vertical layout on the group
+            // Force flex layout
             discountGroup.style.setProperty('display', 'flex', 'important');
-            discountGroup.style.setProperty('flex-direction', 'column', 'important');
-            discountGroup.style.setProperty('gap', '10px', 'important');
             discountGroup.style.setProperty('width', '100%', 'important');
-            discountGroup.style.setProperty('align-items', 'stretch', 'important');
+
+            if (isMobile) {
+                // Mobile: Vertical
+                discountGroup.style.setProperty('flex-direction', 'column', 'important');
+                discountGroup.style.setProperty('gap', '10px', 'important');
+                discountGroup.style.setProperty('align-items', 'stretch', 'important');
+            } else {
+                // Desktop: Horizontal
+                discountGroup.style.setProperty('flex-direction', 'row', 'important');
+                discountGroup.style.setProperty('gap', '8px', 'important');
+                discountGroup.style.setProperty('align-items', 'flex-start', 'important');
+            }
         }
 
         if (discountInput) {
             // Force input styling
-            discountInput.style.setProperty('width', '100%', 'important');
             discountInput.style.setProperty('padding', '12px 15px', 'important');
             discountInput.style.setProperty('border', '2px solid #e0e0e0', 'important');
             discountInput.style.setProperty('border-radius', '8px', 'important');
-            discountInput.style.setProperty('font-size', '15px', 'important');
             discountInput.style.setProperty('box-sizing', 'border-box', 'important');
             discountInput.style.setProperty('background', 'white', 'important');
-            discountInput.style.setProperty('min-height', '44px', 'important');
-            discountInput.style.setProperty('flex', 'none', 'important');
+            discountInput.style.setProperty('min-height', isMobile ? '48px' : '44px', 'important');
+            discountInput.style.setProperty('font-size', isMobile ? '16px' : '15px', 'important');
+
+            if (isMobile) {
+                discountInput.style.setProperty('width', '100%', 'important');
+                discountInput.style.setProperty('flex', 'none', 'important');
+            } else {
+                discountInput.style.setProperty('flex', '1', 'important');
+                discountInput.style.removeProperty('width');
+            }
 
             // Ensure placeholder is set
             if (!discountInput.getAttribute('placeholder')) {
@@ -755,20 +771,38 @@ jQuery(document).ready(function($) {
 
         if (discountBtn) {
             // Force button styling
-            discountBtn.style.setProperty('width', '100%', 'important');
-            discountBtn.style.setProperty('padding', '12px 20px', 'important');
+            discountBtn.style.setProperty('border', 'none', 'important');
+            discountBtn.style.setProperty('border-radius', '8px', 'important');
+            discountBtn.style.setProperty('font-weight', '600', 'important');
             discountBtn.style.setProperty('font-size', '16px', 'important');
-            discountBtn.style.setProperty('min-height', '44px', 'important');
-            discountBtn.style.setProperty('flex', 'none', 'important');
-            discountBtn.style.setProperty('min-width', 'auto', 'important');
+            discountBtn.style.setProperty('cursor', 'pointer', 'important');
+            discountBtn.style.setProperty('min-height', isMobile ? '48px' : '44px', 'important');
+
+            if (isMobile) {
+                discountBtn.style.setProperty('width', '100%', 'important');
+                discountBtn.style.setProperty('flex', 'none', 'important');
+                discountBtn.style.setProperty('padding', '12px 20px', 'important');
+            } else {
+                discountBtn.style.setProperty('flex', '0 0 auto', 'important');
+                discountBtn.style.setProperty('padding', '0 24px', 'important');
+                discountBtn.style.setProperty('white-space', 'nowrap', 'important');
+                discountBtn.style.removeProperty('width');
+            }
         }
     }
 
     // Run immediately
-    forceDiscountVerticalLayout();
+    forceDiscountResponsiveLayout();
 
     // Run again after short delay (in case discount section is shown dynamically)
-    setTimeout(forceDiscountVerticalLayout, 500);
+    setTimeout(forceDiscountResponsiveLayout, 500);
+
+    // Run on window resize
+    let resizeTimer;
+    $(window).on('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(forceDiscountResponsiveLayout, 250);
+    });
 
     // Run whenever discount section becomes visible
     const observer = new MutationObserver(function(mutations) {
@@ -776,7 +810,7 @@ jQuery(document).ready(function($) {
             if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
                 const target = mutation.target;
                 if (target.id === 'discount-code-section' && target.style.display !== 'none') {
-                    setTimeout(forceDiscountVerticalLayout, 50);
+                    setTimeout(forceDiscountResponsiveLayout, 50);
                 }
             }
         });
