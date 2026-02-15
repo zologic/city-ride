@@ -214,6 +214,29 @@ jQuery(document).ready(function($) {
             utilsScript: "https://cdn.jsdelivr.net/npm/intl-tel-input@18.5.3/build/js/utils.js"
         });
 
+        // FORCE PADDING AFTER INITIALIZATION (backup method)
+        setTimeout(function() {
+            input.style.paddingLeft = '100px';
+            input.style.boxSizing = 'border-box';
+            input.style.width = '100%';
+
+            // Force layout recalculation
+            input.offsetHeight;
+        }, 100);
+
+        // Re-apply padding on window resize
+        window.addEventListener('resize', function() {
+            if (window.innerWidth <= 768) {
+                input.style.paddingLeft = '105px';
+            } else if (window.innerWidth <= 480) {
+                input.style.paddingLeft = '100px';
+            } else if (window.innerWidth <= 375) {
+                input.style.paddingLeft = '95px';
+            } else {
+                input.style.paddingLeft = '100px';
+            }
+        });
+
         let hasInteracted = false;
 
         // Mark as interacted on first input
