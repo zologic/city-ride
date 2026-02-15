@@ -1197,8 +1197,14 @@ public function admin_enqueue_scripts($hook) {
         $where_sql = count($where_clauses) > 1 ? 'WHERE ' . implode(' AND ', $where_clauses) : '';
 
         // Get total number of rides for pagination
-        $total_rides_query = $wpdb->prepare("SELECT COUNT(id) FROM $table_name $where_sql", ...$query_args);
-        $total_rides = $wpdb->get_var($total_rides_query);
+        if (empty($query_args)) {
+            // No filters applied, use direct query without prepare
+            $total_rides = $wpdb->get_var("SELECT COUNT(id) FROM $table_name $where_sql");
+        } else {
+            // Filters applied, use prepare with placeholders
+            $total_rides_query = $wpdb->prepare("SELECT COUNT(id) FROM $table_name $where_sql", ...$query_args);
+            $total_rides = $wpdb->get_var($total_rides_query);
+        }
         $total_pages = ceil($total_rides / $per_page);
 
         // Get rides for the current page
@@ -1206,6 +1212,7 @@ public function admin_enqueue_scripts($hook) {
         $final_query_args[] = $per_page;
         $final_query_args[] = $offset;
 
+        // Always use prepare here because we always have LIMIT and OFFSET placeholders
         $rides_query = $wpdb->prepare(
             "SELECT * FROM $table_name $where_sql ORDER BY created_at DESC LIMIT %d OFFSET %d",
             ...$final_query_args
@@ -1536,11 +1543,20 @@ public function admin_enqueue_scripts($hook) {
         $where_sql = count($where_clauses) > 1 ? 'WHERE ' . implode(' AND ', $where_clauses) : '';
 
         // Fetch all rides matching the filters
-        $rides_query = $wpdb->prepare(
-            "SELECT id, passenger_name, passenger_phone, passenger_email, address_from, address_to, distance_km, total_price, status, cab_driver_id, eta, stripe_payment_id, created_at, updated_at FROM $table_name $where_sql ORDER BY created_at DESC",
-            ...$query_args
-        );
-        $rides = $wpdb->get_results($rides_query, ARRAY_A);
+        if (empty($query_args)) {
+            // No filters applied, use direct query without prepare
+            $rides = $wpdb->get_results(
+                "SELECT id, passenger_name, passenger_phone, passenger_email, address_from, address_to, distance_km, total_price, status, cab_driver_id, eta, stripe_payment_id, created_at, updated_at FROM $table_name $where_sql ORDER BY created_at DESC",
+                ARRAY_A
+            );
+        } else {
+            // Filters applied, use prepare with placeholders
+            $rides_query = $wpdb->prepare(
+                "SELECT id, passenger_name, passenger_phone, passenger_email, address_from, address_to, distance_km, total_price, status, cab_driver_id, eta, stripe_payment_id, created_at, updated_at FROM $table_name $where_sql ORDER BY created_at DESC",
+                ...$query_args
+            );
+            $rides = $wpdb->get_results($rides_query, ARRAY_A);
+        }
 
         if (empty($rides)) {
             wp_send_json_error('Nema podataka za izvoz s odabranim filterima.');
