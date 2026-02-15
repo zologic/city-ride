@@ -1315,40 +1315,107 @@ input#passenger-phone {
     }
 }
 
-/* Discount Code Section - Full-Width Block Layout */
-#discount-code-section {
-    margin-top: 30px !important;
-    margin-bottom: 25px !important;
+/* ==========================================
+   DISCOUNT CODE SECTION - Responsive Layout
+   ========================================== */
+.discount-code-section {
+    margin: 20px 0 !important;
+    padding: 16px !important;
+    background: #f8f9fa !important;
+    border-radius: 10px !important;
+    border: 1px solid #e9ecef !important;
 }
 
+.discount-code-section label {
+    display: block !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    margin-bottom: 10px !important;
+    color: #333 !important;
+}
+
+/* Inner wrapper - horizontal on desktop */
 #discount-code-section > div {
     display: flex !important;
-    flex-direction: column !important;
-    gap: 12px !important;
-    align-items: stretch !important;
+    flex-direction: row !important;
+    gap: 8px !important;
+    width: 100% !important;
 }
 
 #discount-code-input {
-    width: 100% !important;
-    flex: none !important;
-    padding: 14px !important;
-    border: 2px solid #ddd !important;
+    flex: 1 !important;
+    min-height: 44px !important;
+    padding: 10px 15px !important;
+    border: 2px solid #e0e0e0 !important;
     border-radius: 8px !important;
-    font-size: 1rem !important;
+    font-size: 15px !important;
     text-transform: uppercase !important;
     box-sizing: border-box !important;
-    transition: border-color 0.3s ease !important;
 }
 
 #discount-code-input:focus {
     outline: none !important;
-    border-color: #007bff !important;
+    border-color: #667eea !important;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
 }
 
 #apply-discount-btn {
-    width: 100% !important;
-    min-width: auto !important;
-    padding: 14px 24px !important;
-    font-size: 1rem !important;
+    flex: 0 0 auto !important;
+    padding: 0 24px !important;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
     font-weight: 600 !important;
+    white-space: nowrap !important;
+    min-height: 44px !important;
+    cursor: pointer !important;
+    transition: transform 0.2s !important;
+}
+
+#apply-discount-btn:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3) !important;
+}
+
+#apply-discount-btn:active {
+    transform: translateY(0) !important;
+}
+
+/* Mobile: Stack vertically */
+@media (max-width: 480px) {
+    #discount-code-section > div {
+        flex-direction: column !important;
+        gap: 10px !important;
+    }
+
+    #discount-code-input {
+        width: 100% !important;
+        min-height: 48px !important;
+        font-size: 16px !important;
+    }
+
+    #apply-discount-btn {
+        width: 100% !important;
+        flex: none !important;
+        padding: 12px 20px !important;
+        font-size: 16px !important;
+    }
+}
+
+/* iPhone SE and smaller */
+@media (max-width: 375px) {
+    .discount-code-section {
+        padding: 12px !important;
+        margin: 15px 0 !important;
+    }
+
+    #discount-code-input {
+        font-size: 15px !important;
+        padding: 10px 12px !important;
+    }
+
+    #apply-discount-btn {
+        font-size: 15px !important;
+    }
 }
