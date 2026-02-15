@@ -1,0 +1,852 @@
+/*
+ * CityRide Admin Styles
+ * Version: 1.0.0
+ * Author: Your Name
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Mulish:wght@300;400;500;600;700;800;900&display=swap');
+
+/* General Admin Page Styling */
+body {
+    font-family: 'Mulish', sans-serif;
+    background-color: #f5f8fa; /* Light background for the page */
+    color: #333;
+    line-height: 1.6;
+}
+
+.wrap.cityride-admin-page {
+    margin-top: 20px;
+    margin-right: 20px;
+    background: #f0f2f5; /* Consistent light background */
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+.wrap h1.wp-heading-inline {
+    font-size: 28px;
+    color: #333;
+    margin-bottom: 15px;
+    border-bottom: 2px solid #eee; /* Subtle bottom border */
+    padding-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+}
+
+.wrap h1.wp-heading-inline .dashicons {
+    font-size: 1.5em;
+    color: #ffa921; /* Orange icon to match theme */
+}
+
+hr.wp-header-end {
+    border: none;
+    border-top: 1px solid #ddd;
+    margin: 10px 0 20px 0;
+}
+
+/* Admin Message / Notice Styling */
+#cityride-admin-message {
+    padding: 12px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 14px;
+    border-left: 5px solid;
+    transition: all 0.3s ease;
+}
+
+#cityride-admin-message.notice-success {
+    background-color: #e6ffe6;
+    border-color: #4CAF50;
+    color: #388E3C;
+}
+
+#cityride-admin-message.notice-error {
+    background-color: #ffe6e6;
+    border-color: #f44336;
+    color: #D32F2F;
+}
+
+/* Dashboard Widgets (Statističke Kartice) - THIS IS THE STYLE FROM THE SCREENSHOT YOU PROVIDED */
+.cityride-dashboard-widgets {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); /* Prilagodljivo za različite ekrane */
+    gap: 20px; /* Veći razmak između kartica */
+    margin-bottom: 30px;
+}
+
+.cityride-dashboard-widget {
+    background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%); /* Zlatno-narandžasti gradient */
+    color: #000000; /* Crna slova za bolju čitljivost */
+    padding: 25px; /* Veći padding */
+    border-radius: 12px; /* Zaobljeniji */
+    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    text-align: center; /* Centriraj sav tekst */
+    display: flex; /* Flexbox za vertikalno centriranje sadržaja */
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 120px; /* Minimalna visina za uniforman izgled */
+}
+
+.cityride-dashboard-widget:hover {
+    transform: translateY(-7px);
+    box-shadow: 0 12px 35px rgba(0,0,0,0.25);
+}
+
+.cityride-dashboard-widget h3 {
+    margin: 0 0 10px 0;
+    font-size: 1rem; /* Malo veći i izraženiji naslov */
+    font-weight: 600;
+    color: #000000; /* Tamnija boja za naslov */
+    line-height: 1.3;
+}
+
+.cityride-dashboard-widget .stat-number {
+    font-size: 1.4rem; /* Veći brojevi */
+    font-weight: 800;
+    color: #000000; /* Crna boja za brojeve */
+    display: block;
+    margin: 0;
+    line-height: 1;
+}
+
+/* Filters and Controls - PREVIOUSLY APPROVED STYLE */
+.cityride-filters-and-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+    align-items: flex-end;
+    margin-bottom: 25px; /* Margin below filters */
+    padding: 20px;
+    background: #ffffff;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+    border: 1px solid #e0e0e0;
+}
+
+.cityride-filters-and-controls .filter-group {
+    display: flex;
+    flex-direction: column;
+    min-width: 150px;
+    flex-grow: 1;
+}
+
+.cityride-filters-and-controls .filter-group label {
+    font-weight: 800;
+    margin-bottom: 5px;
+    color: #555;
+    font-size: 13px;
+}
+
+.cityride-filters-and-controls .filter-group input[type="text"],
+.cityride-filters-and-controls .filter-group input[type="date"],
+.cityride-filters-and-controls .filter-group select {
+    width: 100%;
+    padding: 10px 16px; /* Malo manji padding da stane bolje */
+    border: 1px solid #ccd0d4;
+    border-radius: 8px;
+    font-size: 1rem;
+    /* UKLONJENO: height: 36px; */
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.07);
+    background: #f9f9f9;
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    /* Dodatna pravila za bolji prikaz select polja */
+    -webkit-appearance: none; /* Uklanja defaultni izgled za Webkit browsere */
+    -moz-appearance: none;    /* Uklanja defaultni izgled za Mozilla browsere */
+    appearance: none;         /* Uklanja defaultni izgled */
+    background-image: url('data:image/svg+xml;utf8,<svg fill="%23444444" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/><path d="M0 0h24v24H0z" fill="none"/></svg>'); /* Custom strelica */
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 20px;
+    padding-right: 35px; /* Dodajte padding desno da strelica ne prekrije tekst */
+}
+
+.cityride-filters-and-controls .filter-group input[type="text"]:focus,
+.cityride-filters-and-controls .filter-group input[type="date"]:focus,
+.cityride-filters-and-controls .filter-group select:focus {
+    border-color: #0073aa;
+    box-shadow: 0 0 0 1px #0073aa, inset 0 1px 2px rgba(0,0,0,0.07);
+    outline: none;
+    background: #fff;
+}
+
+.cityride-filters-and-controls .filter-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 0;
+    flex-wrap: wrap;
+}
+
+.cityride-filters-and-controls .button {
+    height: 36px;
+    line-height: 1; /* <-- Promijenjeno na 1 da se ne miješa sa flex poravnanjem */
+    padding: 0 14px;
+    font-size: 14px;
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 0.3s cubic-bezier(.25,.8,.25,1);
+    white-space: nowrap;
+    display: inline-flex; /* <-- Već ste imali, ali potvrđujem */
+    align-items: center; /* <-- KLJUČNO: Centriranje sadržaja unutar svakog dugmeta */
+    justify-content: center; /* <-- Ako želite horizontalno centriranje, iako je tekstlijevo */
+    gap: 5px; /* Razmak između ikone i teksta */
+}
+
+.cityride-filters-and-controls .button-primary {
+    background: linear-gradient(45deg, #0073aa, #005177);
+    border-color: #0073aa;
+    color: white;
+    box-shadow: 0 4px 10px rgba(0,115,170,0.2);
+}
+
+.cityride-filters-and-controls .button-primary:hover {
+    background: linear-gradient(45deg, #005177, #0073aa);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 15px rgba(0,115,170,0.3);
+}
+
+.cityride-filters-and-controls .button-secondary {
+    background-color: #f0f0f0;
+    border-color: #ccc;
+    color: #555;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+}
+
+.cityride-filters-and-controls .button-secondary:hover {
+    background-color: #e0e0e0;
+    border-color: #bbb;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 15px rgba(0,0,0,0.1);
+}
+
+.cityride-filters-and-controls .button .dashicons {
+    line-height: 1; /* <-- Promijenjeno na 1 */
+    margin-right: 0; /* Razmak se sada kontrolira preko 'gap' na roditelju dugmeta */
+    /* vertical-align: middle; */ /* <-- Može se ukloniti, flexbox se brine o tome */
+}
+
+.cityride-filters-and-controls .per-page-select {
+    margin-left: auto; /* Pushes to the right */
+}
+
+/* Auto Refresh Indicator (within filters) */
+.cityride-refresh-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: #555;
+    margin-left: 15px;
+    line-height: 36px; /* Align with buttons */
+}
+
+.cityride-refresh-indicator .spinner {
+    margin: 0;
+    vertical-align: middle;
+}
+
+.refreshing {
+    animation: pulse-refresh 1s ease-in-out infinite;
+}
+
+@keyframes pulse-refresh {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1; }
+}
+
+/* Table Styling - PREVIOUSLY APPROVED STYLE (light header, default alignment) */
+.cityride-table-container {
+    background: #fff;
+    border-radius: 8px;
+    overflow-x: auto;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    margin-bottom: 20px; /* Keep margin here for space above lower paginav */
+}
+
+.wp-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0;
+}
+
+.wp-list-table th,
+.wp-list-table td {
+    padding: 12px 15px;
+    text-align: left; /* Default text alignment */
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 14px;
+    vertical-align: middle;
+}
+
+.wp-list-table th {
+    background-color: orange;
+    font-weight: 700;
+    color: #000000;
+    text-transform: uppercase;
+    font-size: 12px;
+    padding-top: 15px;
+    padding-bottom: 15px;
+}
+
+.wp-list-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.wp-list-table tbody tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+
+.wp-list-table tbody tr:hover {
+    background-color: #f5f5f5;
+}
+
+/* Status Badges - PREVIOUSLY APPROVED STYLE */
+.wp-list-table .status {
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: inline-block;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.wp-list-table .status-unassigned {
+    background-color: #ffe0b2; /* Light Orange */
+    color: #e65100; /* Darker Orange */
+}
+
+.wp-list-table .status-assigned {
+    background-color: #c8e6c9; /* Light Green */
+    color: #2e7d32; /* Dark Green */
+}
+
+.wp-list-table .status-completed {
+    background-color: #bbdefb; /* Light Blue */
+    color: #1565c0; /* Dark Blue */
+}
+
+/* Table Action Buttons - PREVIOUSLY APPROVED STYLE */
+.wp-list-table td .button {
+    font-size: 12px;
+    padding: 6px 10px;
+    height: auto;
+    line-height: 1.5;
+    margin: 0 5px 0 0;
+    white-space: nowrap;
+}
+
+.wp-list-table td .assign-driver-btn {
+    background: linear-gradient(45deg, #4CAF50, #66BB6A);
+    color: white;
+    border: none;
+    box-shadow: 0 2px 8px rgba(76,175,80,0.2);
+}
+.wp-list-table td .assign-driver-btn:hover {
+    background: linear-gradient(45deg, #66BB6A, #4CAF50);
+    box-shadow: 0 4px 12px rgba(76,175,80,0.3);
+    transform: translateY(-1px);
+}
+
+.wp-list-table td .complete-ride-btn {
+    background: linear-gradient(45deg, #007bff, #0056b3);
+    color: white;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0,123,255,0.2);
+}
+.wp-list-table td .complete-ride-btn:hover {
+    background: linear-gradient(45deg, #0056b3, #007bff);
+    box-shadow: 0 4px 12px rgba(0,123,255,0.3);
+    transform: translateY(-1px);
+}
+
+/* Pagination Styling (tablenav.bottom) - PREVIOUSLY APPROVED STYLE */
+.tablenav.bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    margin-top: 10px;
+    font-size: 13px;
+    color: #555;
+}
+
+.tablenav-pages {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.pagination-info {
+    font-weight: 600;
+    padding: 0 5px;
+}
+
+.pagination-links .button {
+    height: 30px;
+    line-height: 1.8;
+    padding: 0 8px;
+    min-width: 30px;
+    text-align: center;
+}
+
+.pagination-links .button.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background-color: #f0f0f0;
+    border-color: #ddd;
+    color: #aaa;
+}
+
+.pagination-links .paging-input {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0 5px;
+}
+
+.pagination-links .paging-input .current-page {
+    width: 40px;
+    text-align: center;
+    padding: 5px 8px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.07);
+}
+
+.pagination-links .total-pages {
+    font-weight: 600;
+    color: #555;
+}
+
+.alignleft.actions { /* Footer pagination actions (e.g., Per Page, Export CSV) */
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.alignleft.actions label {
+    font-weight: 600;
+    color: #555;
+    font-size: 0.95em;
+}
+
+#rides-per-page {
+    padding: 6px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+
+/* Modal Styling - MODIFIED: Modal itself is the content box, with background and position */
+.cityride-modal {
+    /* Uklonjena 'display: none;' odavde, JS će to kontrolisati preko 'element.style' */
+    position: fixed; /* Fiksiran na ekranu */
+    z-index: 9999999; /* Izuzetno visok z-index da bude iznad svega */
+    
+    background-color: orange; /* Narandžasta pozadina kao na screenshotu */
+    color: #000000; /* Crna slova za bolju čitljivost */
+    padding: 30px;
+    border-radius: 12px;
+    border: 1px solid #FFD700; /* Zlatni border */
+    
+    width: 90%; /* Prozor će zauzimati do 90% širine ekrana */
+    max-width: 400px; /* Ali nikad više od 400px (manji prozor) */
+    min-width: 280px; /* Minimalna širina da ne bude preuzak na malim ekranima */
+    
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    box-sizing: border-box; /* Padding se uračunava u ukupnu širinu/visinu */
+    font-family: 'Mulish', sans-serif;
+
+    /* KLJUČNO: Centriranje prozora na sredini ekrana */
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%); /* Pomakni se za pola svoje širine/visine */
+    
+    /* Animacija za pojavljivanje prozora */
+    animation-name: modal-appear;
+    animation-duration: 0.3s;
+    /* Uklonjeno: background-color: rgba(0,0,0,0.6); backdrop-filter: blur(3px); justify-content: center; align-items: center; display: flex; padding-top: 50px; */
+    /* Ove linije su uklonjene jer želimo da .cityride-modal bude SAM modalni prozor, a ne cijeli overlay.
+       Ako želite blur efekat preko CIJELOG ekrana, to zahtijeva poseban, nevidljivi overlay div IZA ovog modala, ali IZNAD ostatka sadržaja. */
+}
+
+/* Nema .cityride-modal-content stila jer je sada sam .cityride-modal kutija */
+
+@keyframes modal-appear {
+    from { opacity: 0; transform: translate(-50%, -60%); } /* Dolazi malo više s vrha */
+    to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+.cityride-modal .close {
+    color: #333;
+    font-size: 30px;
+    font-weight: bold;
+    position: absolute;
+    right: 15px;
+    top: 10px;
+    cursor: pointer;
+}
+
+.cityride-modal .close:hover {
+    color: #F00;
+}
+
+.cityride-modal h2 {
+    color: #333;
+    margin-top: 0;
+    border-bottom: 2px solid #FFA500;
+    padding-bottom: 10px;
+    text-align: center;
+    font-size: 1.8em;
+    margin-bottom: 25px;
+}
+
+.cityride-modal label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 5px;
+    color: #555;
+    font-size: 1em;
+}
+
+.cityride-modal input[type="text"],
+.cityride-modal input[type="number"],
+.cityride-modal select {
+    width: calc(100% - 20px); /* Podesi širinu zbog paddinga */
+    padding: 10px;
+    border: 1px solid #FFD700;
+    border-radius: 5px;
+    font-size: 1em;
+    margin-bottom: 15px;
+    background-color: #FFFFFF;
+    color: #000000;
+}
+
+.cityride-modal input:focus,
+.cityride-modal select:focus {
+    border-color: #FF8C00;
+    outline: none;
+    box-shadow: 0 0 5px rgba(255,140,0,0.3);
+}
+
+.cityride-modal #modal-message {
+    text-align: center;
+    padding: 10px;
+    margin-top: 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.cityride-modal .form-actions {
+    display: flex;
+    justify-content: flex-end; /* Align buttons right */
+    gap: 10px;
+    margin-top: 30px;
+}
+
+.cityride-modal .form-actions button {
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 15px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    border: none;
+}
+
+.cityride-modal .button-primary {
+    background: linear-gradient(45deg, #007bff, #0056b3); /* Plavi gradient za submit dugme u modalu */
+    color: white;
+    box-shadow: 0 4px 10px rgba(0,123,255,0.3);
+}
+
+.cityride-modal .button-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 10px rgba(0,123,255,0.3);
+}
+
+.cityride-modal .cancel-modal {
+    background: white !important; /* Siva boja */
+}
+
+.cityride-modal .cancel-modal:hover {
+    box-shadow: 0 4px 10px rgba(108,117,125,0.3) !important;
+}
+
+/* Admin Config Page Styling - PREVIOUSLY APPROVED STYLE */
+.cityride-admin-config {
+    margin-top: 20px;
+    margin-right: 20px;
+    background: #f0f2f5;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+.cityride-admin-config h1 {
+    font-size: 28px;
+    color: #333;
+    margin-bottom: 25px;
+    border-bottom: 2px solid #eee;
+    padding-bottom: 10px;
+}
+
+.cityride-admin-config .form-table {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 20px 30px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+}
+
+.cityride-admin-config .form-table th,
+.cityride-admin-config .form-table td {
+    padding: 15px 0;
+    vertical-align: top;
+    font-size: 14px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.cityride-admin-config .form-table tr:last-child th,
+.cityride-admin-config .form-table tr:last-child td {
+    border-bottom: none;
+}
+
+.cityride-admin-config .form-table th {
+    width: 250px;
+    font-weight: 600;
+    color: #444;
+}
+
+.cityride-admin-config .form-table input[type="text"],
+.cityride-admin-config .form-table input[type="url"],
+.cityride-admin-config .form-table input[type="number"] {
+    width: 100%;
+    max-width: 450px;
+    padding: 8px 10px;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.07);
+    font-size: 14px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.cityride-admin-config .form-table input:focus {
+    border-color: #0073aa;
+    box-shadow: 0 0 0 1px #0073aa, inset 0 1px 2px rgba(0,0,0,0.07);
+    outline: none;
+}
+
+.cityride-admin-config .form-table .small-text {
+    max-width: 150px;
+}
+
+.cityride-admin-config .form-table input[type="checkbox"] {
+    width: auto;
+    margin-top: 5px;
+}
+
+.cityride-admin-config .form-table .description {
+    font-size: 13px;
+    color: #777;
+    margin-top: 5px;
+    display: block;
+    line-height: 1.5;
+}
+
+#test-webhook-message {
+    padding: 10px;
+    border-radius: 4px;
+    margin-top: 10px;
+    font-size: 13px;
+}
+
+#test-webhook-message.success {
+    background-color: #e6ffe6;
+    color: #388E3C;
+    border: 1px solid #4CAF50;
+}
+
+#test-webhook-message.error {
+    background-color: #ffe6e6;
+    color: #D32F2F;
+    border: 1px solid #f44336;
+}
+
+.cityride-admin-config .submit .button-primary {
+    background: linear-gradient(45deg, #0073aa, #005177);
+    border: none;
+    padding: 14px 35px;
+    font-size: 17px;
+    border-radius: 8px;
+    margin-top: 25px;
+    box-shadow: 0 5px 20px rgba(0,115,170,0.35);
+    font-weight: 600;
+    transition: all 0.3s ease;
+    color: white;
+    cursor: pointer;
+}
+.cityride-admin-config .submit .button-primary:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(0,115,170,0.5);
+    opacity: 0.9;
+}
+
+
+/* Responsive Adjustments */
+@media screen and (max-width: 992px) {
+    .cityride-admin-page,
+    .cityride-admin-config {
+        margin-left: 10px;
+        margin-right: 10px;
+        padding: 15px;
+    }
+
+    .cityride-dashboard-widgets {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); /* Adjust for slightly smaller screens */
+        gap: 15px;
+    }
+
+    .cityride-dashboard-widget {
+        padding: 20px;
+        min-height: 100px;
+    }
+    .cityride-dashboard-widget h3 {
+        font-size: 1rem;
+    }
+    .cityride-dashboard-widget .stat-number {
+        font-size: 1.8rem;
+    }
+
+    .cityride-filters-and-controls {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 15px;
+        gap: 10px; /* Reduce gap on smaller screens */
+    }
+
+    .cityride-filters-and-controls .filter-group {
+        width: 100%;
+        min-width: unset;
+    }
+
+    .cityride-filters-and-controls .filter-actions {
+        flex-direction: column;
+        align-items: stretch;
+        margin-top: 10px;
+        gap: 8px;
+    }
+
+    .cityride-filters-and-controls .button {
+        width: 100%;
+        margin-bottom: 0;
+    }
+
+    .tablenav.bottom {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .tablenav-pages, .alignleft.actions {
+        width: 100%;
+        justify-content: center;
+    }
+
+    /* Table Responsiveness for small screens */
+    .wp-list-table th,
+    .wp-list-table td {
+        white-space: nowrap; /* Prevent wrapping in cells */
+    }
+
+    .wp-list-table thead {
+        display: none; /* Hide headers on small screens */
+    }
+
+    .wp-list-table, .wp-list-table tbody, .wp-list-table tr, .wp-list-table td {
+        display: block;
+        width: 100%;
+    }
+
+    .wp-list-table tr {
+        margin-bottom: 15px;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        position: relative;
+        padding: 10px;
+    }
+
+    .wp-list-table td {
+        border: none;
+        position: relative;
+        padding-left: 100px; /* Space for the label */
+        text-align: right; /* Align content to the right */
+    }
+
+    .wp-list-table td::before {
+        content: attr(data-label);
+        position: absolute;
+        left: 10px;
+        width: 80px;
+        padding-right: 10px;
+        white-space: nowrap;
+        text-align: left;
+        font-weight: 600;
+        color: #666;
+        font-size: 13px;
+    }
+
+    .wp-list-table td:last-child { /* Actions column */
+        text-align: center; /* Center actions */
+        padding-left: 10px; /* Reset padding */
+        border-top: 1px solid #eee;
+        padding-top: 15px;
+        margin-top: 10px;
+    }
+     .wp-list-table td:last-child::before {
+        display: none;
+    }
+
+    .cityride-modal-content {
+        /* Nema ga više, ali sam ostavio responsive pravilo za slučaj da se negdje koristi */
+        width: 95%;
+        padding: 20px;
+    }
+
+    .cityride-admin-config .form-table th,
+    .cityride-admin-config .form-table td {
+        display: block;
+        width: 100%;
+        padding: 10px 0;
+    }
+    .cityride-admin-config .form-table th {
+        text-align: left;
+        padding-bottom: 5px;
+    }
+    .cityride-admin-config .form-table td {
+        padding-top: 5px;
+    }
+}
+
+@media screen and (max-width: 480px) {
+    .cityride-dashboard-widgets {
+        grid-template-columns: 1fr; /* Single column on very small screens */
+    }
+    .cityride-config-section {
+        padding: 20px;
+    }
+    .cityride-config-section h2 {
+        font-size: 1.5em;
+    }
+    .cityride-admin-config .submit .button-primary {
+        width: 100%;
+    }
+}
