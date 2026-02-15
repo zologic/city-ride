@@ -28,6 +28,9 @@ class CityRideBooking {
 
         // Initialize Stripe library
         $this->init_stripe();
+
+        // Run performance index migration if needed
+        $this->migrate_performance_indexes();
     }
 
     /**
@@ -99,6 +102,9 @@ class CityRideBooking {
      */
     public function activate() {
         $this->create_database_table();
+
+        // Run performance index migration
+        $this->migrate_performance_indexes();
 
         // Add default options if they don't exist
         add_option('cityride_stripe_public_key', '');
@@ -641,6 +647,9 @@ class CityRideBooking {
         // Log successful booking creation
         error_log('CityRide: Booking ' . $booking_id . ' successfully saved to database');
 
+        // Clear dashboard and key metrics caches
+        $this->clear_cache(array('stats_dashboard', 'stats_key_metrics'));
+
         // Check webhook notifications setting and send booking_confirmed event
         $webhook_enabled = get_option('cityride_enable_webhook_notifications');
         error_log('CityRide: Webhook notifications setting: ' . ($webhook_enabled === '1' ? 'enabled' : 'disabled'));
@@ -1098,6 +1107,85 @@ class CityRideBooking {
     }
 
     /**
+     * Unified caching wrapper with object cache + transient fallback
+     * Tries wp_cache_* first (Redis/Memcached if available), falls back to WordPress transients
+     *
+     * @param string $key Cache key (will be prefixed with 'cityride_')
+     * @param callable $callback Function to generate data if cache miss
+     * @param int $expiration Expiration time in seconds for transient fallback (default 3600 = 1 hour)
+     * @return mixed Cached or freshly generated data
+     */
+    private function get_cached_data($key, $callback, $expiration = 3600) {
+        // Prefix all keys
+        $cache_key = 'cityride_' . $key;
+
+        // Try object cache first (Redis/Memcached if available)
+        $data = wp_cache_get($cache_key, 'cityride');
+        if ($data !== false) {
+            return $data;
+        }
+
+        // Fallback to transient
+        $data = get_transient($cache_key);
+        if ($data !== false) {
+            // Store in object cache for next request (if available)
+            wp_cache_set($cache_key, $data, 'cityride', $expiration);
+            return $data;
+        }
+
+        // Cache miss - generate data
+        $data = call_user_func($callback);
+
+        // Store in both caches
+        wp_cache_set($cache_key, $data, 'cityride', $expiration);
+        set_transient($cache_key, $data, $expiration);
+
+        return $data;
+    }
+
+    /**
+     * Clear cache entries from both object cache and transients
+     *
+     * @param string|array $keys Single key or array of keys to clear (without 'cityride_' prefix)
+     */
+    private function clear_cache($keys) {
+        if (!is_array($keys)) {
+            $keys = array($keys);
+        }
+
+        foreach ($keys as $key) {
+            $cache_key = 'cityride_' . $key;
+            wp_cache_delete($cache_key, 'cityride');
+            delete_transient($cache_key);
+        }
+    }
+
+    /**
+     * Get asset URL with minified version support based on SCRIPT_DEBUG
+     *
+     * @param string $asset_path Asset path relative to plugin directory (e.g., 'assets/admin-script.js')
+     * @return string Asset URL with .min suffix if SCRIPT_DEBUG is not enabled
+     */
+    private function get_asset_url($asset_path) {
+        $suffix = (defined('SCRIPT_DEBUG') && SCRIPT_DEBUG) ? '' : '.min';
+        $info = pathinfo($asset_path);
+        $minified_path = $info['dirname'] . '/' . $info['filename'] . $suffix . '.' . $info['extension'];
+        return CITYRIDE_PLUGIN_URL . $minified_path;
+    }
+
+    /**
+     * Get asset version based on file modification time for cache busting
+     * Falls back to plugin version if file doesn't exist
+     *
+     * @param string $asset_path Asset path relative to plugin directory (e.g., 'assets/admin-script.js')
+     * @return string File modification timestamp or plugin version
+     */
+    private function get_asset_version($asset_path) {
+        $file_path = CITYRIDE_PLUGIN_PATH . $asset_path;
+        return file_exists($file_path) ? filemtime($file_path) : CITYRIDE_VERSION;
+    }
+
+    /**
      * Creates the custom database table for CityRide bookings.
      */
     private function create_database_table() {
@@ -1269,6 +1357,71 @@ class CityRideBooking {
     }
 
     /**
+     * Creates performance-optimized database indexes
+     * Adds indexes for frequently queried columns to improve query performance
+     * Migrates from using only PRIMARY KEYs to comprehensive indexing strategy
+     */
+    private function migrate_performance_indexes() {
+        global $wpdb;
+
+        // Check if indexes have already been applied
+        $indexes_version = get_option('cityride_indexes_version', '0');
+        if ($indexes_version === '1.0') {
+            return; // Indexes already created
+        }
+
+        $rides_table = $wpdb->prefix . 'cityride_rides';
+        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+        $discount_codes_table = $wpdb->prefix . 'cityride_discount_codes';
+
+        // Get existing indexes for rides table
+        $existing_indexes = $wpdb->get_results("SHOW INDEX FROM $rides_table");
+        $index_names = array_column($existing_indexes, 'Key_name');
+
+        // Create composite index on status and created_at for rides table
+        if (!in_array('idx_status_created_at', $index_names)) {
+            $wpdb->query("CREATE INDEX idx_status_created_at ON $rides_table(status, created_at)");
+            error_log('CityRide: Created index idx_status_created_at on rides table');
+        }
+
+        // Create index on cab_driver_id for driver assignment queries
+        if (!in_array('idx_cab_driver_id', $index_names)) {
+            $wpdb->query("CREATE INDEX idx_cab_driver_id ON $rides_table(cab_driver_id)");
+            error_log('CityRide: Created index idx_cab_driver_id on rides table');
+        }
+
+        // Create index on infobip_message_id for webhook lookups
+        if (!in_array('idx_infobip_message_id', $index_names)) {
+            $wpdb->query("CREATE INDEX idx_infobip_message_id ON $rides_table(infobip_message_id)");
+            error_log('CityRide: Created index idx_infobip_message_id on rides table');
+        }
+
+        // Get existing indexes for drivers table
+        $existing_driver_indexes = $wpdb->get_results("SHOW INDEX FROM $drivers_table");
+        $driver_index_names = array_column($existing_driver_indexes, 'Key_name');
+
+        // Create index on status for active driver queries
+        if (!in_array('idx_status', $driver_index_names)) {
+            $wpdb->query("CREATE INDEX idx_status ON $drivers_table(status)");
+            error_log('CityRide: Created index idx_status on drivers table');
+        }
+
+        // Get existing indexes for discount codes table
+        $existing_discount_indexes = $wpdb->get_results("SHOW INDEX FROM $discount_codes_table");
+        $discount_index_names = array_column($existing_discount_indexes, 'Key_name');
+
+        // Create composite index for discount code validation queries
+        if (!in_array('idx_active_validity', $discount_index_names)) {
+            $wpdb->query("CREATE INDEX idx_active_validity ON $discount_codes_table(is_active, valid_from, valid_until)");
+            error_log('CityRide: Created index idx_active_validity on discount_codes table');
+        }
+
+        // Mark indexes as created
+        update_option('cityride_indexes_version', '1.0');
+        error_log('CityRide: Performance indexes migration completed successfully');
+    }
+
+    /**
      * Adds admin menu pages for the plugin.
      */
     public function add_admin_menu() {
@@ -1369,9 +1522,13 @@ class CityRideBooking {
 public function admin_enqueue_scripts($hook) {
     // Only enqueue on CityRide admin pages
     if (strpos($hook, 'cityride') !== false) {
-        wp_enqueue_style('cityride-admin-css', CITYRIDE_PLUGIN_URL . 'assets/admin-style.css', array(), CITYRIDE_VERSION);
-        // KLJUČNA PROMJENA OVDJE: Koristimo time() za verziju admin-script.js
-        wp_enqueue_script('cityride-admin-js', CITYRIDE_PLUGIN_URL . 'assets/admin-script.js', array('jquery'), time(), true);
+        // Enqueue admin CSS with file modification time for cache busting
+        $admin_css_path = 'assets/admin-style.css';
+        wp_enqueue_style('cityride-admin-css', $this->get_asset_url($admin_css_path), array(), $this->get_asset_version($admin_css_path));
+
+        // Enqueue admin JS with file modification time for cache busting (loads .min version unless SCRIPT_DEBUG)
+        $admin_js_path = 'assets/admin-script.js';
+        wp_enqueue_script('cityride-admin-js', $this->get_asset_url($admin_js_path), array('jquery'), $this->get_asset_version($admin_js_path), true);
 
         // Localize script to pass AJAX URL and nonce to JavaScript
         wp_localize_script('cityride-admin-js', 'cityride_admin_ajax', array(
@@ -1382,7 +1539,8 @@ public function admin_enqueue_scripts($hook) {
         // Load Chart.js and analytics script only on analytics page
         if (strpos($hook, 'cityride-analytics') !== false) {
             wp_enqueue_script('chartjs', 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js', array(), '4.4.0', true);
-            wp_enqueue_script('cityride-analytics-js', CITYRIDE_PLUGIN_URL . 'assets/analytics.js', array('jquery', 'chartjs'), time(), true);
+            $analytics_js_path = 'assets/analytics.js';
+            wp_enqueue_script('cityride-analytics-js', $this->get_asset_url($analytics_js_path), array('jquery', 'chartjs'), $this->get_asset_version($analytics_js_path), true);
         }
     }
 }
@@ -1391,8 +1549,9 @@ public function admin_enqueue_scripts($hook) {
      * Enqueues frontend-specific scripts and styles.
      */
     public function frontend_enqueue_scripts() {
-        // Enqueue styles
-        wp_enqueue_style('cityride-frontend-css', CITYRIDE_PLUGIN_URL . 'assets/frontend-style.css', array(), CITYRIDE_VERSION);
+        // Enqueue styles with file modification time for cache busting
+        $frontend_css_path = 'assets/frontend-style.css';
+        wp_enqueue_style('cityride-frontend-css', $this->get_asset_url($frontend_css_path), array(), $this->get_asset_version($frontend_css_path));
         wp_enqueue_style( 'font-awesome', 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css', array(), '5.15.4', 'all' );
         wp_enqueue_style('mapbox-gl-css', 'https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css');
 
@@ -1405,10 +1564,9 @@ public function admin_enqueue_scripts($hook) {
         // Nema potrebe za dupliciranjem koda ovdje.
         // --- KRAJ UKLANJANJA ---
 
-        // Vaš frontend-script.js
-        // Sada zavisi samo od jQuery, Mapbox i Stripe jer OneSignal plugin osigurava OneSignal objekat globalno.
-        // Koristimo time() za verziju da bi se osiguralo da se nova verzija učita tokom debugiranja.
-        wp_enqueue_script('cityride-frontend-js', CITYRIDE_PLUGIN_URL . 'assets/frontend-script.js', array('jquery', 'mapbox-gl-js', 'stripe-js'), time(), true);
+        // Enqueue frontend JS with file modification time for cache busting (loads .min version unless SCRIPT_DEBUG)
+        $frontend_js_path = 'assets/frontend-script.js';
+        wp_enqueue_script('cityride-frontend-js', $this->get_asset_url($frontend_js_path), array('jquery', 'mapbox-gl-js', 'stripe-js'), $this->get_asset_version($frontend_js_path), true);
 
         // Localize script for frontend AJAX calls
         wp_localize_script('cityride-frontend-js', 'cityride_frontend_ajax', array(
@@ -2076,12 +2234,12 @@ public function admin_enqueue_scripts($hook) {
             $query_args[] = $status;
         }
         if (!empty($date_from)) {
-            $where_clauses[] = 'DATE(created_at) >= %s';
-            $query_args[] = $date_from;
+            $where_clauses[] = 'created_at >= %s';
+            $query_args[] = $date_from . ' 00:00:00';
         }
         if (!empty($date_to)) {
-            $where_clauses[] = 'DATE(created_at) <= %s';
-            $query_args[] = $date_to;
+            $where_clauses[] = 'created_at <= %s';
+            $query_args[] = $date_to . ' 23:59:59';
         }
         if (!empty($search)) {
             $search_like = '%' . $wpdb->esc_like($search) . '%';
@@ -2252,68 +2410,52 @@ public function admin_enqueue_scripts($hook) {
      * This function is now called internally by ajax_load_rides.
      */
     private function get_ride_statistics() {
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'cityride_rides';
+        return $this->get_cached_data('stats_dashboard', function() {
+            global $wpdb;
+            $table_name = $wpdb->prefix . 'cityride_rides';
 
-        $stats = array(
-            'today_rides' => 0,
-            'this_month_rides' => 0,
-            'monthly_revenue' => 0.00,
-            'pending_rides' => 0,
-            'assigned_rides' => 0
-        );
+            $stats = array(
+                'today_rides' => 0,
+                'this_month_rides' => 0,
+                'monthly_revenue' => 0.00,
+                'pending_rides' => 0,
+                'assigned_rides' => 0
+            );
 
-        // Get current time in WordPress timezone (adjusted for site's timezone)
-        // This is generally better for "today" and "this month" calculations relative to the user
-        $current_wp_time = current_time('mysql'); // Returns YYYY-MM-DD HH:MM:SS in WP timezone
-        $current_date_only = date('Y-m-d', strtotime($current_wp_time));
-        $current_month_start = date('Y-m-01 00:00:00', strtotime($current_wp_time));
+            // Get current time in WordPress timezone (adjusted for site's timezone)
+            // This is generally better for "today" and "this month" calculations relative to the user
+            $current_wp_time = current_time('mysql'); // Returns YYYY-MM-DD HH:MM:SS in WP timezone
+            $current_date_only = date('Y-m-d', strtotime($current_wp_time));
+            $current_month_start = date('Y-m-01 00:00:00', strtotime($current_wp_time));
+            $current_date_start = $current_date_only . ' 00:00:00';
+            $current_date_end = $current_date_only . ' 23:59:59';
 
-        // Vožnje danas
-        $today_count = $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT COUNT(id) FROM $table_name WHERE DATE(created_at) = %s",
-                $current_date_only
-            )
-        );
-        $stats['today_rides'] = intval($today_count ?: 0);
-
-        // Vožnje ovaj mjesec
-        $month_count = $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT COUNT(id) FROM $table_name WHERE created_at >= %s",
+            // Consolidated query using conditional aggregation - 5 queries reduced to 1
+            $stats_row = $wpdb->get_row($wpdb->prepare(
+                "SELECT
+                    SUM(CASE WHEN created_at >= %s AND created_at <= %s THEN 1 ELSE 0 END) as today_rides,
+                    SUM(CASE WHEN created_at >= %s THEN 1 ELSE 0 END) as this_month_rides,
+                    SUM(CASE WHEN status IN ('completed', 'payed_unassigned', 'payed_assigned')
+                        AND created_at >= %s THEN total_price ELSE 0 END) as monthly_revenue,
+                    SUM(CASE WHEN status = 'payed_unassigned' THEN 1 ELSE 0 END) as pending_rides,
+                    SUM(CASE WHEN status = 'payed_assigned' THEN 1 ELSE 0 END) as assigned_rides
+                FROM $table_name",
+                $current_date_start, $current_date_end,
+                $current_month_start,
                 $current_month_start
-            )
-        );
-        $stats['this_month_rides'] = intval($month_count ?: 0);
+            ));
 
-        // Monthly revenue
-        $monthly_revenue_from_db = $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT COALESCE(SUM(total_price), 0) FROM $table_name
-                 WHERE status IN ('completed', 'payed_unassigned', 'payed_assigned')
-                 AND created_at >= %s",
-                $current_month_start
-            )
-        );
-        $stats['monthly_revenue'] = floatval($monthly_revenue_from_db);
+            $stats['today_rides'] = intval($stats_row->today_rides ?: 0);
+            $stats['this_month_rides'] = intval($stats_row->this_month_rides ?: 0);
+            $stats['monthly_revenue'] = floatval($stats_row->monthly_revenue ?: 0);
+            $stats['pending_rides'] = intval($stats_row->pending_rides ?: 0);
+            $stats['assigned_rides'] = intval($stats_row->assigned_rides ?: 0);
 
-        // Pending rides
-        $pending_count = $wpdb->get_var(
-            "SELECT COUNT(id) FROM $table_name WHERE status = 'payed_unassigned'"
-        );
-        $stats['pending_rides'] = intval($pending_count ?: 0);
+            // Debug log (ukloniti u produkciji)
+            error_log('CityRide Stats (optimized, cache miss): ' . json_encode($stats));
 
-        // Assigned rides
-        $assigned_count = $wpdb->get_var(
-            "SELECT COUNT(id) FROM $table_name WHERE status = 'payed_assigned'"
-        );
-        $stats['assigned_rides'] = intval($assigned_count ?: 0);
-
-        // Debug log (ukloniti u produkciji)
-        error_log('CityRide Stats (after fix): ' . json_encode($stats));
-
-        return $stats;
+            return $stats;
+        }, 3600); // 1 hour cache expiration for transient fallback
     }
 
  /**
@@ -2413,6 +2555,9 @@ public function admin_enqueue_scripts($hook) {
                  error_log("CityRide: No notification sent for ride {$ride_id}. Status was not 'payed_unassigned' or update didn't involve status change from 'payed_unassigned'. Current status: {$current_status}");
             }
 
+            // Clear dashboard and driver stats caches
+            $this->clear_cache(array('stats_dashboard', 'stats_key_metrics', 'stats_drivers'));
+
             wp_send_json_success('Vozač uspješno dodijeljen.');
         }
     }
@@ -2474,6 +2619,9 @@ public function admin_enqueue_scripts($hook) {
                     $this->update_driver_earnings($ride['cab_driver_id'], $ride['total_price']);
                 }
             }
+
+            // Clear all statistics caches (affects revenue)
+            $this->clear_cache(array('stats_dashboard', 'stats_key_metrics', 'stats_drivers'));
 
             wp_send_json_success('Vožnja uspješno završena.');
         }
@@ -2564,6 +2712,9 @@ public function admin_enqueue_scripts($hook) {
             }
         }
 
+        // Clear statistics caches
+        $this->clear_cache(array('stats_dashboard', 'stats_key_metrics'));
+
         wp_send_json_success(array(
             'message' => 'Vožnja uspješno otkazana.',
             'ride_id' => $ride_id,
@@ -2635,12 +2786,12 @@ public function admin_enqueue_scripts($hook) {
             $query_args[] = $status;
         }
         if (!empty($date_from)) {
-            $where_clauses[] = 'DATE(created_at) >= %s';
-            $query_args[] = $date_from;
+            $where_clauses[] = 'created_at >= %s';
+            $query_args[] = $date_from . ' 00:00:00';
         }
         if (!empty($date_to)) {
-            $where_clauses[] = 'DATE(created_at) <= %s';
-            $query_args[] = $date_to;
+            $where_clauses[] = 'created_at <= %s';
+            $query_args[] = $date_to . ' 23:59:59';
         }
         if (!empty($search)) {
             $search_like = '%' . $wpdb->esc_like($search) . '%';
@@ -2892,51 +3043,75 @@ public function admin_enqueue_scripts($hook) {
         global $wpdb;
         $table_name = $wpdb->prefix . 'cityride_rides';
 
-        // Process each result
+        // Extract all message IDs from payload
+        $message_ids = array();
+        foreach ($payload['results'] as $result) {
+            if (isset($result['messageId'])) {
+                $message_ids[] = $result['messageId'];
+            }
+        }
+
+        if (empty($message_ids)) {
+            error_log('CityRide Infobip Webhook: No valid message IDs in payload');
+            return new WP_REST_Response('No valid message IDs', 400);
+        }
+
+        // Fetch all matching rides in a single query
+        $placeholders = implode(',', array_fill(0, count($message_ids), '%s'));
+        $rides = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, infobip_message_id, passenger_phone FROM $table_name
+             WHERE infobip_message_id IN ($placeholders)",
+            ...$message_ids
+        ));
+
+        // Build lookup map
+        $ride_map = array();
+        foreach ($rides as $ride) {
+            if (!empty($ride->infobip_message_id)) {
+                $ride_map[$ride->infobip_message_id] = $ride;
+            }
+        }
+
+        // Build batch update arrays
+        $update_cases = array();
+        $ride_ids = array();
+        $current_time = current_time('mysql');
+
         foreach ($payload['results'] as $result) {
             $message_id = $result['messageId'] ?? null;
             $status = $result['status']['groupName'] ?? null;
-            $phone_number = $result['to'] ?? null;
-            $done_at = $result['doneAt'] ?? null;
 
             if (!$message_id || !$status) {
                 error_log('CityRide Infobip Webhook: Missing messageId or status in result');
                 continue;
             }
 
-            // Map Infobip status to our internal status
-            $internal_status = $this->map_infobip_status($status);
-
-            // Find ride by Infobip message ID or phone number
-            $ride = $wpdb->get_row($wpdb->prepare(
-                "SELECT id, passenger_phone, sms_delivery_status FROM $table_name
-                 WHERE infobip_message_id = %s OR passenger_phone LIKE %s
-                 ORDER BY created_at DESC LIMIT 1",
-                $message_id,
-                '%' . substr($phone_number, -8) . '%' // Match last 8 digits
-            ));
-
-            if ($ride) {
-                // Update SMS delivery status
-                $updated = $wpdb->update(
-                    $table_name,
-                    array(
-                        'sms_delivery_status' => $internal_status,
-                        'sms_delivery_updated_at' => current_time('mysql'),
-                        'infobip_message_id' => $message_id
-                    ),
-                    array('id' => $ride->id),
-                    array('%s', '%s', '%s'),
-                    array('%d')
-                );
-
-                if ($updated !== false) {
-                    error_log("CityRide Infobip Webhook: Updated ride {$ride->id} SMS status to {$internal_status} (Infobip: {$status})");
-                } else {
-                    error_log("CityRide Infobip Webhook: Failed to update ride {$ride->id}: " . $wpdb->last_error);
-                }
+            if (isset($ride_map[$message_id])) {
+                $ride_id = $ride_map[$message_id]->id;
+                $internal_status = $this->map_infobip_status($status);
+                $ride_ids[] = $ride_id;
+                $update_cases[] = $wpdb->prepare("WHEN %d THEN %s", $ride_id, $internal_status);
+                error_log("CityRide Infobip Webhook: Will update ride {$ride_id} to {$internal_status}");
             } else {
-                error_log("CityRide Infobip Webhook: No ride found for message ID {$message_id} or phone {$phone_number}");
+                error_log("CityRide Infobip Webhook: No ride found for message ID {$message_id}");
+            }
+        }
+
+        // Execute batch UPDATE with CASE statement
+        if (!empty($update_cases) && !empty($ride_ids)) {
+            $cases_sql = implode(' ', $update_cases);
+            $ids_sql = implode(',', array_map('intval', $ride_ids));
+            $query = "UPDATE $table_name SET
+                sms_delivery_status = CASE id $cases_sql END,
+                sms_delivery_updated_at = '" . esc_sql($current_time) . "'
+                WHERE id IN ($ids_sql)";
+
+            $result = $wpdb->query($query);
+
+            if ($result !== false) {
+                error_log("CityRide Infobip Webhook: Batch updated " . count($ride_ids) . " rides");
+            } else {
+                error_log("CityRide Infobip Webhook: Batch update failed: " . $wpdb->last_error);
             }
         }
 
@@ -3537,9 +3712,10 @@ public function admin_enqueue_scripts($hook) {
             FROM $rides_table
             WHERE cab_driver_id = %s
             AND status = 'completed'
-            AND DATE(created_at) BETWEEN %s AND %s
+            AND created_at >= %s
+            AND created_at <= %s
             ORDER BY created_at DESC
-        ", $driver->vehicle_number, $start_date, $end_date));
+        ", $driver->vehicle_number, $start_date . ' 00:00:00', $end_date . ' 23:59:59'));
 
         // Calculate totals
         $total_rides = count($rides);
@@ -3616,21 +3792,29 @@ public function admin_enqueue_scripts($hook) {
      * Get driver statistics
      */
     private function get_driver_statistics() {
-        global $wpdb;
-        $drivers_table = $wpdb->prefix . 'cityride_drivers';
+        return $this->get_cached_data('stats_drivers', function() {
+            global $wpdb;
+            $drivers_table = $wpdb->prefix . 'cityride_drivers';
 
-        $total_drivers = $wpdb->get_var("SELECT COUNT(*) FROM $drivers_table");
-        $active_drivers = $wpdb->get_var("SELECT COUNT(*) FROM $drivers_table WHERE status = 'active'");
-        $total_earnings = $wpdb->get_var("SELECT SUM(total_earnings) FROM $drivers_table");
+            // Consolidated query - 4 queries reduced to 1
+            $stats_row = $wpdb->get_row("
+                SELECT
+                    COUNT(*) as total_drivers,
+                    SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_drivers,
+                    COALESCE(SUM(total_earnings), 0) as total_earnings
+                FROM $drivers_table
+            ");
 
-        $top_driver = $wpdb->get_row("SELECT name, total_rides FROM $drivers_table ORDER BY total_rides DESC LIMIT 1");
+            // Get top driver separately due to ORDER BY LIMIT requirement
+            $top_driver = $wpdb->get_row("SELECT name, total_rides FROM $drivers_table ORDER BY total_rides DESC LIMIT 1");
 
-        return array(
-            'total_drivers' => intval($total_drivers),
-            'active_drivers' => intval($active_drivers),
-            'total_earnings' => floatval($total_earnings ?: 0),
-            'top_driver' => $top_driver ? $top_driver->name . ' (' . $top_driver->total_rides . ')' : '-'
-        );
+            return array(
+                'total_drivers' => intval($stats_row->total_drivers),
+                'active_drivers' => intval($stats_row->active_drivers),
+                'total_earnings' => floatval($stats_row->total_earnings),
+                'top_driver' => $top_driver ? $top_driver->name . ' (' . $top_driver->total_rides . ')' : '-'
+            );
+        }, 3600); // 1 hour cache expiration
     }
 
     /**
@@ -3814,24 +3998,32 @@ public function admin_enqueue_scripts($hook) {
      * Get key metrics for analytics dashboard
      */
     private function get_key_metrics() {
-        global $wpdb;
-        $table = $wpdb->prefix . 'cityride_rides';
+        return $this->get_cached_data('stats_key_metrics', function() {
+            global $wpdb;
+            $table = $wpdb->prefix . 'cityride_rides';
 
-        // Today's revenue
-        $today_revenue = $wpdb->get_var("
-            SELECT COALESCE(SUM(total_price), 0)
-            FROM $table
-            WHERE DATE(created_at) = CURDATE()
-            AND status = 'completed'
-        ");
+            // Get current date using WordPress timezone
+            $current_wp_time = current_time('mysql');
+            $today_start = date('Y-m-d 00:00:00', strtotime($current_wp_time));
+            $today_end = date('Y-m-d 23:59:59', strtotime($current_wp_time));
+            $yesterday_start = date('Y-m-d 00:00:00', strtotime($current_wp_time . ' -1 day'));
+            $yesterday_end = date('Y-m-d 23:59:59', strtotime($current_wp_time . ' -1 day'));
 
-        // Yesterday's revenue
-        $yesterday_revenue = $wpdb->get_var("
-            SELECT COALESCE(SUM(total_price), 0)
-            FROM $table
-            WHERE DATE(created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
-            AND status = 'completed'
-        ");
+            // Today's revenue
+            $today_revenue = $wpdb->get_var($wpdb->prepare("
+                SELECT COALESCE(SUM(total_price), 0)
+                FROM $table
+                WHERE created_at >= %s AND created_at <= %s
+                AND status = 'completed'
+            ", $today_start, $today_end));
+
+            // Yesterday's revenue
+            $yesterday_revenue = $wpdb->get_var($wpdb->prepare("
+                SELECT COALESCE(SUM(total_price), 0)
+                FROM $table
+                WHERE created_at >= %s AND created_at <= %s
+                AND status = 'completed'
+            ", $yesterday_start, $yesterday_end));
 
         // Calculate percentage change
         $today_vs_yesterday_change = 0;
@@ -3872,14 +4064,15 @@ public function admin_enqueue_scripts($hook) {
             $cancellation_rate = ($cancellation_data->cancelled_rides / $cancellation_data->total_rides) * 100;
         }
 
-        return array(
-            'today_revenue' => floatval($today_revenue),
-            'today_vs_yesterday_change' => floatval($today_vs_yesterday_change),
-            'month_revenue' => floatval($month_data->revenue),
-            'month_rides' => intval($month_data->rides),
-            'avg_ride_value' => floatval($avg_ride_value),
-            'cancellation_rate' => floatval($cancellation_rate)
-        );
+            return array(
+                'today_revenue' => floatval($today_revenue),
+                'today_vs_yesterday_change' => floatval($today_vs_yesterday_change),
+                'month_revenue' => floatval($month_data->revenue),
+                'month_rides' => intval($month_data->rides),
+                'avg_ride_value' => floatval($avg_ride_value),
+                'cancellation_rate' => floatval($cancellation_rate)
+            );
+        }, 3600); // 1 hour cache expiration
     }
 
     /**
